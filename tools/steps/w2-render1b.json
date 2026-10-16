@@ -1,0 +1,10 @@
+[
+  {"waitFor": "window.__ready", "timeout": 90000},
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"eval": "(async()=>{const g=__game,d=g.debug; const f=(a,b,c,e,gg,h,n)=>{for(let y=b;y<=gg;y++)for(let z=c;z<=h;z++)for(let x=a;x<=e;x++)d.setBlock(x,y,z,n)}; g.player.flying=true; d.setTime(6000); d.hideHud(true); f(21,4,21,23,5,21,'glass'); d.setBlock(22,4,21,'water'); d.setBlock(22,4,20,'ice'); d.setBlock(22,4,22,'gold_block'); await d.tp(22.5,3.6,17.5); d.lookAt(22.5,4.5,21.5); await d.frames(30); return [d.blockName(22,4,21), d.blockName(22,5,21), d.blockName(21,4,21)]})()"},
+  {"sleep": 600},
+  {"screenshot": "tools/out/w2int/render1-from-north.png"},
+  {"eval": "(async()=>{const g=__game,d=g.debug; d.setBlock(22,4,20,'gold_block'); d.setBlock(22,4,22,'ice'); await d.tp(22.5,3.6,25.5); d.lookAt(22.5,4.5,21.5); await d.frames(30); return [d.blockName(22,4,21), d.blockName(22,4,22)]})()"},
+  {"sleep": 600},
+  {"screenshot": "tools/out/w2int/render1-from-south.png"}
+]

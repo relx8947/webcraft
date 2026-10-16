@@ -1,0 +1,9 @@
+[
+  {"eval": "__game.debug.waitIdle(60000)"},
+  {"eval": "(async()=>{const g=__game,d=g.debug,p=g.player; g.applySettings({difficulty:'normal'}); d.setTime(18000); const x0=Math.floor(p.x), z0=Math.floor(p.z), y=Math.floor(p.y); for(let dx=-1;dx<=1;dx++) for(let dz=-1;dz<=1;dz++) for(let k=0;k<4;k++) if (dx||dz||k===3) d.setBlock(x0+dx,y+k,z0+dz,'glass'); const types=['pig','cow','sheep','chicken','zombie','skeleton','creeper','spider']; let n=0; for(let i=0;i<40;i++){ const a=i/40*Math.PI*2, r=8+(i%4)*4; const x=Math.floor(x0+Math.cos(a)*r), z=Math.floor(z0+Math.sin(a)*r); const yy=g.world.getTopY(x,z)+1; if (g.spawnMob(types[i%8], x+0.5, yy, z+0.5, {persistent:true})) n++; } d.lookDeg(30,-15); d.hideHud(false); await d.frames(30); d.perf(true); return {spawned:n, mobs:d.mobs(200).length, live:d.mobs(200).filter(m=>!m.frozen).length}})()"},
+  {"sleep": 10000},
+  {"eval": "(()=>{const g=__game,d=g.debug; const pf=d.perf(); const st=d.stats(); const ms=d.mobs(200); return {perf:pf, mobs:ms.length, unfrozen:ms.filter(m=>!m.frozen).length, within32:ms.filter(m=>m.dist<32).length, chasing:ms.filter(m=>m.target).length, entities:st.entities, drawCalls:st.renderer.drawCalls, tris:st.renderer.triangles, chunks:st.world.meshed+'/'+st.world.loaded, hp:g.player.health}})()"},
+  {"eval": "(()=>{__game.ui.toggleDebug(); return 1})()"},
+  {"sleep": 600},
+  {"screenshot": "tools/out/w2int/perf-mobs-f3.png"}
+]

@@ -1,0 +1,12 @@
+[
+  {"eval": "(async () => { const g = window.__game; const w = await import('/tools/mob-wire.js'); window.__w = w; await w.wire(g); g.applySettings({}); g.settings.difficulty = 'normal'; g.setTime(6000); g.debug.lookDeg(0, -8); return g.player.health; })()"},
+  {"eval": "(() => { const g = window.__game; const c = window.__w.spawnInFront(g, 'creeper', 5, 0); c.target = g.player; window.__c = c; return [c.x, c.y, c.z]; })()"},
+  {"sleep": 900},
+  {"screenshot": "tools/out/mobs/creeper-swell.png"},
+  {"eval": "(() => { const c = window.__c; return 'swell ' + c.swell + ' removed ' + c.removed; })()"},
+  {"sleep": 1200},
+  {"screenshot": "tools/out/mobs/creeper-boom.png"},
+  {"eval": "(() => { const g = window.__game, c = window.__c; return 'removed ' + c.removed + ' hp ' + g.player.health + ' dead ' + g.player.dead + ' msg ' + g.player.deathMessage; })()"},
+  {"sleep": 1500},
+  {"screenshot": "tools/out/mobs/creeper-crater.png"}
+]

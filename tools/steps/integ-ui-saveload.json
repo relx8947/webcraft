@@ -1,0 +1,129 @@
+[
+ {
+  "eval": "localStorage.clear(); indexedDB.deleteDatabase('webcraft'); 1"
+ },
+ {
+  "sleep": 1500
+ },
+ {
+  "click": [
+   640,
+   354
+  ]
+ },
+ {
+  "sleep": 800
+ },
+ {
+  "click": [
+   876,
+   594
+  ]
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "click": [
+   639,
+   284
+  ]
+ },
+ {
+  "type": "12345"
+ },
+ {
+  "click": [
+   399,
+   402
+  ]
+ },
+ {
+  "sleep": 100
+ },
+ {
+  "screenshot": "tools/out/integ-ui-create-filled.png"
+ },
+ {
+  "click": [
+   399,
+   666
+  ]
+ },
+ {
+  "waitFor": "window.__ready",
+  "timeout": 90000
+ },
+ {
+  "eval": "__game.debug.waitIdle(30000)"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; const x=Math.floor(p.x)+2, z=Math.floor(p.z); const y=g.world.getTopY(x,z)+1; g.debug.setBlock(x,y,z,'gold_block'); g.debug.setBlock(x,y+1,z,'diamond_block'); window.__edit=[x,y,z]; localStorage.setItem(\"__edit\", JSON.stringify([x,y,z])); g.debug.give('glowstone', 7); g.debug.setTime(13000); p.setPosition(p.x+0.25, p.y+3, p.z-1.25); p.yaw=1.0; return {edit: window.__edit, mode: p.mode, pos:[p.x,p.y,p.z]}})()"
+ },
+ {
+  "sleep": 1500
+ },
+ {
+  "eval": "(()=>{const p=__game.player; return {pos:[p.x,p.y,p.z], yaw:p.yaw, time:__game.time, mode:p.mode}})()"
+ },
+ {
+  "key": "Escape"
+ },
+ {
+  "sleep": 500
+ },
+ {
+  "click": [
+   639,
+   450
+  ]
+ },
+ {
+  "waitFor": "__game.state === 'title' && __game.ui.currentScreen === 'title'",
+  "timeout": 30000
+ },
+ {
+  "screenshot": "tools/out/integ-ui-back-title.png"
+ },
+ {
+  "eval": "location.reload(); 1"
+ },
+ {
+  "sleep": 2500
+ },
+ {
+  "waitFor": "window.__game && __game.ui && __game.ui.currentScreen === 'title'",
+  "timeout": 30000
+ },
+ {
+  "click": [
+   640,
+   354
+  ]
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "screenshot": "tools/out/integ-ui-worldlist.png"
+ },
+ {
+  "click": [
+   402,
+   594
+  ]
+ },
+ {
+  "waitFor": "window.__ready",
+  "timeout": 90000
+ },
+ {
+  "eval": "__game.debug.waitIdle(30000)"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; const [x,y,z]=JSON.parse(localStorage.getItem(\"__edit\")); return {edit:[x,y,z], b0: g.debug.blockName(x,y,z), b1: g.debug.blockName(x,y+1,z), pos:[p.x,p.y,p.z], yaw:p.yaw, time:g.time, mode:p.mode, glowstone: p.inventory.count(57)}})()"
+ },
+ {
+  "screenshot": "tools/out/integ-ui-reloaded.png"
+ }
+]

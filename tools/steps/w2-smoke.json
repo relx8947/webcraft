@@ -1,0 +1,8 @@
+[
+  {"eval": "(() => { const g = window.__game; return { state: g.state, spawner: !!g.spawner, be: !!g.blockEntities, mobs: g.debug.mobs().length, ents: g.entities.count, diff: g.settings.difficulty, stats: g.spawner.stats }; })()"},
+  {"sleep": 4000},
+  {"eval": "(() => { const g = window.__game; const ms = g.debug.mobs(200); return { n: ms.length, types: ms.map(m => m.type + '@' + m.dist + (m.frozen ? 'F' : '')).join(' '), stats: g.spawner.stats }; })()"},
+  {"eval": "(() => { const g = window.__game; g.ui.toggleDebug(); return g.getDebugInfo().slice(0, 4); })()"},
+  {"sleep": 500},
+  {"screenshot": "tools/out/w2int/smoke-f3.png"}
+]

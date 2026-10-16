@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebCraft UI 测试页</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+<canvas id="game-canvas"></canvas>
+<div id="ui-root"></div>
+<script type="module">
+// Standalone UI test page with a mock game.
+// URL params:
+//   screen=title|worlds|create|options|about|pause|inventory|creative|crafting|chat|death|hud|loading
+//          |furnace|chest|savefailed
+//   mode=survival|creative  health=0..20  food=0..20  air=0..300  water=1  f3=1  fps=1  hide=1 (F1)
+//   chat=1 (sample chat lines)  prefill=/give%20dia  damage=1  progress=0..1  scale=0..4  tab=<creative tab id>
+//   search=<text>  cursor=<item name>  notex=1 (skip textures.js, use the fallback icons)
+//   realinput=1 (use the real src/game/input.js)  hint=1 (show the "click to play" hint)  dark=1  slot=0..8
+//   furnace: burn=0..1 (fire left)  cook=0..1 (arrow)  live=1 (tick the furnace: 20 Hz, speed=<x> faster)
+//            empty=1 (no items)  in=<item> out=<item>
+//   hunger HUD: poison=1 (poisoned hearts)  hungry=1 (Hunger effect food)  saturation=<n>
+//   storage=memory (title / worlds / create: browser storage unavailable warning)
+import { UIManager } from '../src/ui/ui.js';
+import { FallbackIcons, textureRGBA } from '../src/ui/assets.js';
+import { Inventory, makeStack } from '../src/game/inventory.js';
+import { ITEM, BLOCK, BLOCKS, itemId, DEFAULT_CREATIVE_HOTBAR } from '../src/world/registry.js';
+import { DEFAULT_SETTINGS, computeDaylight } from '../src/config.js';
+import { runCommand } from '../src/game/commands.js';
+import { BlockEntityManager } from '../src/game/blockentities.js';
+
+const P = new URLSearchParams(location.search);
+const num = (k, d) => (P.has(k) ? Number(P.get(k)) : d);
+
+// ---------------------------------------------------------------- textures / icons (with fallback)
+let textures = null;
+let icons = null;
+if (!P.has('notex')) {
+  try {
+    const m = await import('../src/render/textures.js');
+    textures = m.generateTextures();
+    icons = new m.IconFactory(textures);
+  } catch (err) {
+    console.warn('[ui-test] textures.js unavailable, using fallback icons:', err?.message ?? err);
+  }
+}
+if (!icons) icons = new FallbackIcons(textures);
+
+// ---------------------------------------------------------------- fake world backdrop
+const canvas = document.getElementById('game-canvas');
+function paintBackdrop() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(innerWidth * dpr);
+  canvas.height = Math.floor(innerHeight * dpr);
+  const g = canvas.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  const W = canvas.width, H = canvas.height;
+  const sky = g.createLinearGradient(0, 0, 0, H);
+  const water = P.get('water') === '1';
+  sky.addColorStop(0, water ? '#1b3f9c' : '#6f9cff');
+  sky.addColorStop(1, water ? '#2c5ec7' : '#c3dbff');
+  g.fillStyle = sky;
+  g.fillRect(0, 0, W, H);
+  const tile = Math.round(H / 11);
+  const tex = (name) => {
+    const t = textureRGBA(textures, name);
+    const c = document.createElement('canvas');
+    c.width = c.height = 16;
+    const cg = c.getContext('2d');
+    if (t) cg.putImageData(new ImageData(new Uint8ClampedArray(t.data), 16, 16), 0, 0);
+    else { cg.fillStyle = name.includes('stone') ? '#7d7d7d' : name.includes('leaves') ? '#3d7a2a' : name.includes('log') ? '#6b5233' : '#866043'; cg.fillRect(0, 0, 16, 16); }
+    return c;
+  };
+  const tint = (c, rgb) => {
+    const d = document.createElement('canvas');
+    d.width = d.height = 16;
+    const dg = d.getContext('2d');
+    dg.drawImage(c, 0, 0);
+    const im = dg.getImageData(0, 0, 16, 16);
+    for (let i = 0; i < 256; i++) {
+      const a = im.data[i * 4 + 3] / 255;
+      for (let k = 0; k < 3; k++) im.data[i * 4 + k] = im.data[i * 4 + k] * (a + (1 - a) * rgb[k] / 255);
+      im.data[i * 4 + 3] = 255;
+    }
+    dg.putImageData(im, 0, 0);
+    return d;
+  };
+  const leavesTint = (c, rgb) => {
+    const d = document.createElement('canvas');
+    d.width = d.height = 16;
+    const dg = d.getContext('2d');
+    dg.drawImage(c, 0, 0);
+    const im = dg.getImageData(0, 0, 16, 16);
+    for (let i = 0; i < 256; i++) for (let k = 0; k < 3; k++) im.data[i * 4 + k] = im.data[i * 4 + k] * rgb[k] / 255;
+    dg.putImageData(im, 0, 0);
+    return d;
+  };
+  const grassSide = tint(tex('grass_block_side'), [145, 189, 89]);
+  const dirt = tex('dirt');
+  const stone = tex('stone');
+  const log = tex('oak_log');
+  const leaves = leavesTint(tex('oak_leaves'), [119, 171, 47]);
+  const cols = Math.ceil(W / tile) + 1;
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const heights = [];
+  let hgt = 4;
+  for (let x = 0; x < cols; x++) {
+    hgt = Math.max(3, Math.min(6, hgt + (rnd() < 0.25 ? 1 : rnd() < 0.33 ? -1 : 0)));
+    heights.push(hgt);
+  }
+  for (let x = 0; x < cols; x++) {
+    const top = H - heights[x] * tile;
+    for (let y = top, r = 0; y < H; y += tile, r++) {
+      g.drawImage(r === 0 ? grassSide : r < 3 ? dirt : stone, x * tile, y, tile, tile);
+    }
+  }
+  for (const tx of [3, Math.floor(cols * 0.7)]) {
+    if (tx >= cols) continue;
+    const base = H - heights[tx] * tile;
+    for (let k = 1; k <= 4; k++) g.drawImage(log, tx * tile, base - k * tile, tile, tile);
+    for (let dy = 3; dy <= 6; dy++) {
+      const r = dy >= 5 ? 1 : 2;
+      for (let dx = -r; dx <= r; dx++) if (!(dx === 0 && dy < 5)) g.drawImage(leaves, (tx + dx) * tile, base - dy * tile, tile, tile);
+    }
+  }
+  if (water) {
+    g.fillStyle = 'rgba(40, 80, 200, 0.35)';
+    g.fillRect(0, 0, W, H);
+  }
+}
+paintBackdrop();
+addEventListener('resize', paintBackdrop);
+
+// ---------------------------------------------------------------- mock game
+const listeners = new Map();
+const stored = [];
+const dropped = [];
+const MENU_SCREENS = new Set(['title', 'worlds', 'create', 'options', 'about', 'loading']);
+const screen = P.get('screen') ?? 'hud';
+
+const inventory = new Inventory();
+const mode = P.get('mode') === 'creative' ? 'creative' : 'survival';
+if (mode === 'creative') {
+  DEFAULT_CREATIVE_HOTBAR.forEach((n, i) => inventory.set(i, makeStack(itemId(n), 64)));
+} else {
+  const hot = [
+    ['diamond_sword', 1, 610], ['iron_pickaxe', 1, 117], ['stone_axe', 1, 9], ['cobblestone', 64], ['oak_planks', 23],
+    ['torch', 16], ['bread', 5], ['crafting_table', 1], ['dirt', 64],
+  ];
+  hot.forEach(([n, c, d], i) => inventory.set(i, makeStack(itemId(n), c, d ?? 0)));
+  const main = [
+    ['oak_log', 12], ['coal', 30], ['iron_ingot', 7], ['stick', 20], ['sand', 45], ['glass', 12], ['apple', 3],
+    ['string', 4], ['gunpowder', 2], ['diamond', 3], null, ['gold_ingot', 9], ['birch_log', 6], ['wooden_shovel', 1, 40],
+    ['flint', 5], null, ['cooked_beef', 8], ['oak_sapling', 4], ['poppy', 2], ['dandelion', 5], ['redstone', 13],
+    ['lapis_lazuli', 22], ['iron_ore', 3], null, ['bucket', 1], ['white_wool', 7], ['bricks', 64],
+  ];
+  main.forEach((e, i) => { if (e) inventory.set(9 + i, makeStack(itemId(e[0]), e[1], e[2] ?? 0)); });
+}
+
+const player = {
+  x: 12.345, y: 64, z: -7.25, vx: 0, vy: 0, vz: 0, yaw: 0.35, pitch: -0.2, mode,
+  health: num('health', screen === 'death' ? 0 : 20), food: num('food', 17), saturation: num('saturation', 2), air: num('air', 300),
+  poisonTicks: P.get('poison') === '1' ? 100 : 0, hungerTicks: P.get('hungry') === '1' ? 600 : 0,
+  dead: screen === 'death', eyeInWater: P.get('water') === '1', inventory, selectedSlot: num('slot', 0),
+  spawnPoint: { x: 0.5, y: 70, z: 0.5 },
+  getEyePosition() { return [this.x, this.y + 1.62, this.z]; },
+  setPosition(x, y, z) { this.x = x; this.y = y; this.z = z; },
+  setGameMode(m) { this.mode = m; },
+  damage(n, cause) { this.health = Math.max(0, this.health - n); if (!this.health) { this.dead = true; game.emit('playerDied', cause); } return true; },
+  respawn() { this.dead = false; this.health = 20; this.food = 20; },
+};
+
+const worldBlocks = new Map();
+const game = {
+  canvas,
+  renderer: { gl: null, getStats: () => ({ sections: 1342, drawCalls: 611, triangles: 1835224, gpuMemoryBytes: 187 * 1048576 }) },
+  input: {
+    enabled: true, locked: false,
+    requestLock() { return Promise.resolve(false); },
+    exitLock() {},
+    onLockChange() { return () => {}; },
+  },
+  audio: { play() {}, unlock() {} },
+  icons, textures, settings: { ...DEFAULT_SETTINGS, showFps: P.get('fps') === '1', guiScale: num('scale', 0) },
+  world: {
+    seed: 123456,
+    getBlock: (x, y, z) => worldBlocks.get(`${x},${y},${z}`) ?? (y < 64 ? BLOCK.STONE : BLOCK.AIR),
+    setBlock: (x, y, z, id) => { worldBlocks.set(`${x},${y},${z}`, id); return true; },
+    getLight: () => (P.get('dark') === '1' ? 0x30 : 0xf0),
+  },
+  player,
+  interaction: { target: { x: 12, y: 63, z: -8, face: 2, blockId: BLOCK.GRASS_BLOCK } },
+  entities: { count: 17 },
+  worldMeta: { id: 'w1', name: '新的世界', seed: 123456, seedText: 'hello', spawn: { x: 0.5, y: 70, z: 0.5 } },
+  state: MENU_SCREENS.has(screen) ? 'title' : 'playing',
+  paused: false, time: 1000, fps: 60,
+  get timeOfDay() { return (this.time % 24000) / 24000; },
+  get daylight() { return computeDaylight(this.timeOfDay); },
+  on(e, fn) { if (!listeners.has(e)) listeners.set(e, []); listeners.get(e).push(fn); },
+  off(e, fn) { const l = listeners.get(e); if (l) l.splice(l.indexOf(fn), 1); },
+  emit(e, ...a) { for (const fn of listeners.get(e) ?? []) fn(...a); },
+  async listWorlds() {
+    return [
+      { id: 'w1', name: '新的世界', seed: 123456, seedText: 'hello', worldType: 'default', mode: 'survival', created: Date.now() - 864e5 * 3, lastPlayed: Date.now() - 36e5 },
+      { id: 'w2', name: '我的创造世界', seed: 42, seedText: '42', worldType: 'flat', mode: 'creative', created: Date.now() - 864e5 * 9, lastPlayed: Date.now() - 864e5 * 2 },
+      { id: 'w3', name: '雪山探险 Snowy Peaks', seed: 987654321, seedText: '', worldType: 'default', mode: 'survival', created: Date.now() - 864e5 * 30, lastPlayed: Date.now() - 864e5 * 12 },
+      ...stored,
+    ];
+  },
+  async createWorld(o) {
+    const meta = { id: 'n' + stored.length, name: o.name, seedText: o.seedText, seed: 1, worldType: o.worldType, mode: o.mode, created: Date.now(), lastPlayed: Date.now() };
+    stored.push(meta);
+    return meta;
+  },
+  async startWorld(meta) {
+    this.state = 'loading';
+    this.worldMeta = meta;
+    for (let i = 0; i <= 10; i++) {
+      this.emit('loadingProgress', i / 10, i < 10 ? `正在生成地形… ${i * 10}%` : '即将完成');
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    this.state = 'playing';
+    player.mode = meta.mode ?? 'survival';
+    this.emit('worldLoaded', meta);
+    this.ui.enterGame();
+  },
+  async deleteWorld(id) { const i = stored.findIndex((w) => w.id === id); if (i >= 0) stored.splice(i, 1); },
+  async saveWorld() {},
+  async quitToTitle() {
+    await new Promise((r) => setTimeout(r, 200));
+    this.state = 'title';
+    this.emit('worldUnloaded');
+    this.ui.showTitle();
+  },
+  setPaused(b) { this.paused = b; },
+  applySettings(partial) { Object.assign(this.settings, partial); this.emit('settingsChanged', this.settings, partial); },
+  setGameMode(m) { player.mode = m; this.emit('gameModeChanged', m); },
+  setTime(t) { this.time = t; },
+  runCommand(text) { runCommand(this, text); },
+  addChatMessage(text, color) { this.emit('chat', text, color); },
+  spawnItem(stack) { dropped.push(stack); },
+  dropFromPlayer(stack) { dropped.push(stack); },
+  respawn() { player.respawn(); this.emit('playerRespawned'); },
+  storage: { persistent: P.get('storage') !== 'memory' },
+  async quitToTitleFailing() {
+    const e = new Error('无法保存世界：浏览器存储空间已满（QuotaExceededError）');
+    e.saveFailed = true;
+    throw e;
+  },
+  getDebugInfo() {
+    const p = player;
+    return [
+      `WebCraft 1.0 (${this.fps} fps, 3 区块更新)`,
+      'C: 1342/1690 (s) D: 8, pC: 002, pU: 00, aB: 14',
+      `E: ${this.entities.count}/150, B: 0, 粒子: 128`,
+      '',
+      `XYZ: ${p.x.toFixed(3)} / ${p.y.toFixed(5)} / ${p.z.toFixed(3)}`,
+      `方块: ${Math.floor(p.x)} ${Math.floor(p.y)} ${Math.floor(p.z)}`,
+      `区块: ${Math.floor(p.x) & 15} ${Math.floor(p.y) & 15} ${Math.floor(p.z) & 15} 位于 ${Math.floor(p.x) >> 4} ${Math.floor(p.y) >> 4} ${Math.floor(p.z) >> 4}`,
+      '朝向: 北 (Towards negative Z) (159.9 / 11.5)',
+      '生物群系: 平原 (plains)',
+      '光照: 15 (15 天空, 0 方块)',
+      `时间: ${this.time % 24000} (第 ${Math.floor(this.time / 24000)} 天)`,
+    ];
+  },
+  get dropped() { return dropped; },
+};
+
+if (P.get('realinput') === '1') {
+  // Integration check with the real Input module (player agent): enabled toggling, edge epochs, locks.
+  try {
+    const { Input } = await import('../src/game/input.js');
+    game.input = new Input(canvas, game.settings);
+  } catch (err) {
+    console.warn('[ui-test] input.js unavailable:', err?.message ?? err);
+  }
+}
+const ui = new UIManager(game, document.getElementById('ui-root'), { handleHudKeys: true, automation: P.get('hint') !== '1' });
+game.ui = ui;
+window.__game = game;
+window.__ui = ui;
+
+// ---------------------------------------------------------------- block entities (furnace / chest screens)
+const blockEntities = new BlockEntityManager(game);
+game.blockEntities = blockEntities;
+const FURNACE_POS = [12, 64, -9];
+const CHEST_POS = [13, 64, -9];
+game.world.setBlock(...FURNACE_POS, BLOCK.FURNACE);
+game.world.setBlock(...CHEST_POS, BLOCK.CHEST);
+const furnace = blockEntities.getOrCreate(...FURNACE_POS, 'furnace');
+if (P.get('empty') !== '1') {
+  furnace.set(0, makeStack(itemId(P.get('in') ?? 'iron_ore'), 12));
+  furnace.set(1, makeStack(ITEM.COAL, 7));
+  furnace.set(2, makeStack(itemId(P.get('out') ?? 'iron_ingot'), 5));
+}
+furnace.burnTotalTicks = 1600;
+furnace.burnTicks = Math.round(num('burn', 0.6) * 1600);
+furnace.cookTicks = Math.round(num('cook', 0.5) * 200);
+const chest = blockEntities.getOrCreate(...CHEST_POS, 'chest');
+[
+  ['oak_log', 23], ['cobblestone', 64], ['cobblestone', 64], null, ['iron_ingot', 9], ['coal', 31], null, ['bread', 6], ['torch', 40],
+  null, ['diamond', 2], ['wheat_seeds', 17], ['wheat', 11], null, ['bow', 1, 50], ['arrow', 37], null, ['string', 6],
+  ['bone', 4], ['rotten_flesh', 12], null, ['gunpowder', 3], ['white_wool', 5], null, ['iron_sword', 1, 120], ['glass', 20], ['cooked_beef', 7],
+].forEach((e, i) => { if (e) chest.set(i, makeStack(itemId(e[0]), e[1], e[2] ?? 0)); });
+window.__blockEntities = blockEntities;
+window.__furnace = furnace;
+window.__chest = chest;
+
+// ---------------------------------------------------------------- open the requested screen
+if (P.get('f3') === '1') ui.toggleDebug();
+if (P.get('hide') === '1') ui.toggleHud();
+if (P.get('chat') === '1' || screen === 'chat') {
+  game.addChatMessage('§e玩家加入了游戏');
+  game.addChatMessage('<玩家> 大家好！Hello world!');
+  runCommand(game, '/time set day');
+  runCommand(game, '/give 钻石镐');
+  runCommand(game, '/gamemode spectator');
+  game.addChatMessage('<Steve> 这里有一个很长很长的聊天消息，用来测试自动换行功能是否正常工作。The quick brown fox jumps over the lazy dog.');
+}
+switch (screen) {
+  case 'title': ui.showTitle(); break;
+  case 'worlds': ui.openWorldList(); break;
+  case 'create': ui.openWorldList(); await new Promise((r) => setTimeout(r, 50)); document.querySelector('.screen-worlds .mc-button:nth-of-type(2)')?.click(); break;
+  case 'options': ui.openOptions(() => ui.showTitle(), false); break;
+  case 'about': ui.showTitle(); document.querySelectorAll('.screen-title .mc-button')[1]?.click(); break;
+  case 'loading': ui.showLoading('正在加载世界'); ui.setLoadingProgress(num('progress', 0.42), '正在生成地形… 42%'); break;
+  case 'pause': ui.enterGame(); ui.openPause(); break;
+  case 'inventory': ui.enterGame(); ui.openInventory(); break;
+  case 'creative': player.mode = 'creative'; ui.enterGame(); ui.openInventory(); break;
+  case 'crafting': ui.enterGame(); ui.openCraftingTable(); break;
+  case 'chat': ui.enterGame(); ui.openChat(P.get('prefill') ?? ''); break;
+  case 'death': ui.enterGame(); ui.openDeath('玩家试图在熔岩里游泳'); break;
+  case 'furnace': ui.enterGame(); ui.openFurnace(furnace); break;
+  case 'chest': ui.enterGame(); ui.openChest(chest); break;
+  case 'savefailed': ui.enterGame(); ui.openPause(); game.quitToTitle = game.quitToTitleFailing; await ui.saveAndQuit(); break;
+  default: ui.enterGame(); break;
+}
+if (P.get('damage') === '1') ui.hud.flashDamage();
+if (screen === 'creative' && P.has('tab')) {
+  const t = ui.screen.tabs.find((x) => x.id === P.get('tab'));
+  if (t) ui.screen.selectTab(t);
+}
+if (screen === 'creative' && P.has('search')) {
+  ui.screen.selectTab(ui.screen.tabs.find((x) => x.search));
+  ui.screen.searchInput.value = P.get('search');
+  ui.screen.searchInput.dispatchEvent(new Event('input'));
+}
+if (P.has('cursor') && ui.screen?.model) {
+  ui.screen.model.cursor = makeStack(itemId(P.get('cursor')), num('cursorCount', 32));
+  ui.trackMouse({ clientX: num('mx', innerWidth / 2 + 60), clientY: num('my', innerHeight / 2 - 40) });
+  ui.screen.model.version++;
+}
+if (P.has('mx') && ui.screen?.lookAtMouse) {
+  ui.trackMouse({ clientX: num('mx', 0), clientY: num('my', 0) });
+  ui.screen.lookAtMouse(num('mx', 0), num('my', 0));
+}
+
+let last = performance.now();
+const live = P.get('live') === '1';
+const speed = num('speed', 1);
+function frame(now) {
+  const dt = (now - last) / 1000;
+  last = now;
+  if (live) blockEntities.tick(Math.min(0.1, dt) * speed);
+  ui.update(dt);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+await ui.fontReady;
+await document.fonts.ready;
+setTimeout(() => { window.__ready = true; }, 100);
+</script>
+</body>
+</html>

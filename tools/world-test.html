@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebCraft world test</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; left: 6px; top: 4px; color: #e8e8e8; font: 12px/1.4 monospace; text-shadow: 1px 1px 0 #000;
+         white-space: pre; pointer-events: none; max-width: 98vw; }
+  #hud b { color: #ffd65c; font-weight: normal; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">starting…</div>
+<script type="module">
+// World manager test page (SPEC §8, §9.6): real WorkerPool + World + IndexedDB Storage.
+// URL parameters:
+//   rd=8            render distance (chunks)            seed=12345   type=default|flat
+//   render=1        draw with the real Renderer (visual check); default: counting fake renderer (timings)
+//   phase=1|2       1 = load, edit, save, reload in-page; 2 = (after a page reload) reopen the saved world
+//   edits=24        number of single-block edits for the latency measurement
+//   time=0.3        time of day for render=1
+// Results: window.__results (also printed with console.log), window.__done = true when finished.
+import { Storage } from '../src/world/storage.js';
+import { WorkerPool } from '../src/world/workerpool.js';
+import { World } from '../src/world/world.js';
+import { WorldGenerator } from '../src/world/worldgen.js';
+import { BLOCK, IS_SOLID } from '../src/world/registry.js';
+import { computeDaylight } from '../src/config.js';
+
+const P = new URLSearchParams(location.search);
+const num = (k, d) => (P.has(k) && Number.isFinite(Number(P.get(k))) ? Number(P.get(k)) : d);
+const rd = num('rd', 8);
+const seed = num('seed', 12345) >>> 0;
+const type = P.get('type') === 'flat' ? 'flat' : 'default';
+const render = P.get('render') === '1';
+const phase = P.get('phase') === '2' ? 2 : 1;
+const editCount = num('edits', 24);
+const timeOfDay = num('time', 0.3);
+const WORLD_ID = 'world-test';
+
+const hud = document.getElementById('hud');
+const lines = [];
+const results = { rd, seed, type, render, phase };
+window.__results = results;
+function log(text) {
+  lines.push(text);
+  hud.innerHTML = lines.join('\n');
+  console.log('[world-test] ' + text.replace(/<\/?b>/g, ''));
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
+async function waitUntil(fn, timeoutMs = 60000) {
+  const t0 = performance.now();
+  while (!fn()) {
+    if (performance.now() - t0 > timeoutMs) throw new Error('timeout waiting for ' + fn);
+    await nextFrame();
+  }
+  return performance.now() - t0;
+}
+const fmt = (v, d = 1) => (Number.isFinite(v) ? v.toFixed(d) : String(v));
+function pct(arr, p) {
+  if (!arr.length) return NaN;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor(s.length * p))];
+}
+
+// ---------------------------------------------------------------------------------------------
+// Renderer (counting fake or the real one) with upload instrumentation
+// ---------------------------------------------------------------------------------------------
+class CountingRenderer {
+  constructor() { this.sections = new Map(); this.bytes = 0; }
+  setSectionMesh(cx, sy, cz, o, c, t) {
+    const key = cx + ',' + sy + ',' + cz;
+    const old = this.sections.get(key);
+    if (old) this.bytes -= old;
+    const b = (o ? o.byteLength : 0) + (c ? c.byteLength : 0) + (t ? t.byteLength : 0);
+    if (b === 0) this.sections.delete(key);
+    else { this.sections.set(key, b); this.bytes += b; }
+  }
+  removeChunk(cx, cz) {
+    for (let sy = 0; sy < 16; sy++) {
+      const key = cx + ',' + sy + ',' + cz;
+      const old = this.sections.get(key);
+      if (old) { this.bytes -= old; this.sections.delete(key); }
+    }
+  }
+  render() {}
+  getStats() { return { sections: this.sections.size, gpuMemoryBytes: this.bytes }; }
+}
+
+let renderer;
+const canvas = document.getElementById('c');
+if (render) {
+  const T = await import('../src/render/textures.js');
+  const { Renderer } = await import('../src/render/renderer.js');
+  const textures = T.generateTextures();
+  renderer = new Renderer(canvas, {
+    textures, misc: T.generateMiscTextures(), buildMipChain: T.buildMipChain, alphaModes: T.getLayerAlphaModes(),
+  });
+  const fit = () => renderer.resize(window.innerWidth, window.innerHeight, window.devicePixelRatio || 1);
+  fit();
+  window.addEventListener('resize', fit);
+} else {
+  renderer = new CountingRenderer();
+}
+const upload = { calls: 0, bytes: 0, last: new Map(), frameMs: [] };
+const realSet = renderer.setSectionMesh.bind(renderer);
+renderer.setSectionMesh = (cx, sy, cz, o, c, t) => {
+  upload.calls++;
+  upload.bytes += (o ? o.byteLength : 0) + (c ? c.byteLength : 0) + (t ? t.byteLength : 0);
+  upload.last.set(cx + ',' + sy + ',' + cz, performance.now());
+  realSet(cx, sy, cz, o, c, t);
+};
+
+// ---------------------------------------------------------------------------------------------
+// World + frame loop
+// ---------------------------------------------------------------------------------------------
+const storage = await Storage.open();
+results.storage = storage.backend;
+const pool = new WorkerPool();
+results.workers = pool.size;
+log(`<b>world-test</b> phase ${phase}  rd ${rd}  seed ${seed}  ${type}  workers ${pool.size}  storage ${storage.backend}  renderer ${render ? 'real' : 'counting'}`);
+
+let meta;
+if (phase === 1) {
+  for (const w of await storage.listWorlds()) if (w.id === WORLD_ID) await storage.deleteWorld(WORLD_ID);
+  const sp = new WorldGenerator(seed, type).findSpawn();
+  meta = {
+    id: WORLD_ID, name: '世界测试', seed, seedText: String(seed), worldType: type, mode: 'creative',
+    created: Date.now(), lastPlayed: Date.now(), time: 1000, spawn: { x: sp.x + 0.5, y: sp.y, z: sp.z + 0.5 },
+    player: null, testEdits: [],
+  };
+  await storage.saveWorldMeta(meta);
+} else {
+  meta = await storage.loadWorldMeta(WORLD_ID);
+  if (!meta) throw new Error('phase 2: no saved world found (run phase 1 in the same browser profile first)');
+}
+const player = { x: meta.spawn.x, y: meta.spawn.y, z: meta.spawn.z };
+const cam = { x: player.x, y: player.y + 1.62, z: player.z, yaw: -Math.PI / 2, pitch: -0.25, roll: 0, fov: 70 };
+const frameState = {
+  camera: cam, timeOfDay, daylight: computeDaylight(timeOfDay), time: 0, renderDistance: rd, underwater: false,
+  inLava: false, clouds: true, selection: null, breaking: null, entities: [], particles: null, hand: null,
+};
+
+window.__frameState = frameState;
+let world = null;
+let drops = 0;
+const frame = { updateMs: [], intervals: [], last: 0, count: 0 };
+let frameTask = null;     // runs at the start of the next frame, before world.update (like interaction.update)
+function loop(t) {
+  if (frame.last) frame.intervals.push(t - frame.last);
+  frame.last = t;
+  frame.count++;
+  if (frameTask) {
+    const task = frameTask;
+    frameTask = null;
+    task();
+  }
+  if (world) {
+    const a = performance.now();
+    world.update(player.x, player.y, player.z, 1 / 60);
+    frame.updateMs.push(performance.now() - a);
+  }
+  if (render && world) {
+    frameState.time = t / 1000;
+    renderer.render(frameState);
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+function createWorld() {
+  return new World({
+    seed, worldType: type, worldId: meta.id, storage, pool, renderer, renderDistance: rd, smoothLighting: true,
+    onDropItem: () => { drops++; },
+  });
+}
+function resetFrameStats() {
+  frame.updateMs.length = 0;
+  frame.intervals.length = 0;
+}
+function frameReport() {
+  return {
+    frames: frame.intervals.length,
+    updateAvgMs: +(frame.updateMs.reduce((a, b) => a + b, 0) / Math.max(1, frame.updateMs.length)).toFixed(3),
+    updateP95Ms: +fmt(pct(frame.updateMs, 0.95), 2),
+    updateMaxMs: +fmt(Math.max(0, ...frame.updateMs), 2),
+    intervalP95Ms: +fmt(pct(frame.intervals, 0.95), 1),
+    longFrames: frame.intervals.filter((v) => v > 50).length,
+  };
+}
+
+async function loadWorld(label) {
+  world = createWorld();
+  window.__world = world;
+  resetFrameStats();
+  const t0 = performance.now();
+  await world.init();
+  await waitUntil(() => world.isAreaReady(player.x, player.z, 2), 120000);
+  const tSpawn = performance.now() - t0;
+  await waitUntil(() => world.stats().idle, 180000);
+  const tIdle = performance.now() - t0;
+  const st = world.stats();
+  const fr = frameReport();
+  const r = {
+    spawnReadyMs: Math.round(tSpawn), fullLoadMs: Math.round(tIdle), loaded: st.loaded, meshed: st.meshed,
+    fromStorage: st.loadedFromStorage, avgGenerateMs: +st.avgGenerateMs.toFixed(2), avgMeshMs: +st.avgMeshMs.toFixed(2),
+    uploads: st.uploads, uploadMB: +st.uploadMB.toFixed(1), sections: renderer.getStats().sections, ...fr,
+  };
+  log(`${label}: spawn area (r=2) ready <b>${r.spawnReadyMs} ms</b>, full rd ${rd} loaded+meshed+uploaded <b>${r.fullLoadMs} ms</b>` +
+    `\n   ${st.loaded} chunks loaded (${st.loadedFromStorage} from storage), ${st.meshed} meshed, ${r.sections} sections, ` +
+    `${r.uploadMB} MB uploaded\n   worker avg: generate ${r.avgGenerateMs} ms, light+mesh ${r.avgMeshMs} ms` +
+    `\n   main thread world.update(): avg ${r.updateAvgMs} ms, p95 ${r.updateP95Ms} ms, max ${r.updateMaxMs} ms; ` +
+    `frame interval p95 ${r.intervalP95Ms} ms, frames > 50 ms: ${r.longFrames}`);
+  return r;
+}
+
+/** Column surface (highest solid block) near the player. */
+function surfaceY(x, z) {
+  let y = world.getTopY(x, z);
+  while (y > 0 && !IS_SOLID[world.getBlock(x, y, z)]) y--;
+  return y;
+}
+
+/**
+ * setBlock at the start of a frame (before world.update, as in the game loop) and wait until the renderer
+ * received the edited section. Returns { total, job }: ms until the upload, ms until the worker result arrived.
+ */
+const resultArrival = new Map();
+function instrumentResults(w) {
+  const apply = w._applyMeshResult.bind(w);
+  w._applyMeshResult = (c, res, seq, urgent) => {
+    resultArrival.set(c.cx + ',' + c.cz, performance.now());
+    apply(c, res, seq, urgent);
+  };
+}
+async function timedEdit(x, y, z, id) {
+  const key = (x >> 4) + ',' + (y >> 4) + ',' + (z >> 4);
+  const ckey = (x >> 4) + ',' + (z >> 4);
+  let t0 = 0;
+  let ok = true;
+  frameTask = () => {
+    t0 = performance.now();
+    ok = world.setBlock(x, y, z, id);
+  };
+  await waitUntil(() => t0 > 0, 5000);
+  if (!ok) throw new Error(`setBlock failed at ${x},${y},${z}`);
+  await waitUntil(() => (upload.last.get(key) ?? 0) >= t0, 5000);
+  return { total: upload.last.get(key) - t0, job: (resultArrival.get(ckey) ?? NaN) - t0 };
+}
+
+/** IndexedDB API checks: metas, listWorlds order, batched reads, deleteWorld isolation, corrupt records. */
+async function storageSelfTest() {
+  const check = (cond, msg) => { if (!cond) throw new Error('storage self-test: ' + msg); };
+  const mk = (v) => { const b = new Uint8Array(65536); b.fill(v, 0, 1024); b[65535] = v; return b; };
+  await storage.saveWorldMeta({ id: 'selftest-a', name: 'A', lastPlayed: 10, player: { x: 1, inv: [[1, 2, 0]] } });
+  await storage.saveWorldMeta({ id: 'selftest-b', name: 'B', lastPlayed: 30 });
+  const list = (await storage.listWorlds()).filter((w) => w.id.startsWith('selftest-')).map((w) => w.id);
+  check(list.join() === 'selftest-b,selftest-a', 'listWorlds order ' + list);
+  check((await storage.loadWorldMeta('selftest-a')).player.inv[0][1] === 2, 'meta round trip');
+  const chunks = [];
+  for (let i = 0; i < 40; i++) chunks.push({ cx: i - 20, cz: (i * 7) % 11 - 5, blocks: mk(i + 1) });
+  const t0 = performance.now();
+  await storage.saveChunks('selftest-a', chunks);
+  await storage.saveChunks('selftest-b', chunks.slice(0, 5));
+  const tw = performance.now() - t0;
+  const t1 = performance.now();
+  const loaded = await Promise.all(chunks.map((c) => storage.loadChunk('selftest-a', c.cx, c.cz)));
+  const tr = performance.now() - t1;
+  loaded.forEach((b, i) => check(b && b[0] === i + 1 && b[65535] === i + 1 && b[2000] === 0, 'chunk ' + i));
+  check((await storage.loadChunk('selftest-a', 999, 999)) === null, 'missing chunk is null');
+  check((await storage.getChunkKeys('selftest-a')).size === 40, 'keys a');
+  // corrupt record written behind the API's back must be rejected, not crash
+  await new Promise((resolve, reject) => {
+    const req = indexedDB.open('webcraft');
+    req.onsuccess = () => {
+      const tx = req.result.transaction('chunks', 'readwrite');
+      tx.objectStore('chunks').put({ f: 1, n: 65536, d: Uint8Array.of(0x81) }, ['selftest-a', 500, 500]);
+      tx.oncomplete = () => { req.result.close(); resolve(); };
+      tx.onabort = () => reject(tx.error);
+    };
+    req.onerror = () => reject(req.error);
+  });
+  let corrupt = false;
+  try { await storage.loadChunk('selftest-a', 500, 500); } catch (e) { corrupt = e instanceof RangeError; }
+  check(corrupt, 'corrupt record rejects with RangeError');
+  await storage.deleteWorld('selftest-a');
+  check((await storage.getChunkKeys('selftest-a')).size === 0, 'deleteWorld removes chunks');
+  check((await storage.loadWorldMeta('selftest-a')) === null, 'deleteWorld removes meta');
+  check((await storage.getChunkKeys('selftest-b')).size === 5, 'other world untouched');
+  check((await storage.loadChunk('selftest-b', chunks[3].cx, chunks[3].cz))[0] === 4, 'other world data');
+  await storage.deleteWorld('selftest-b');
+  results.storageTest = { ok: true, write40ms: +fmt(tw, 1), read40ParallelMs: +fmt(tr, 1) };
+  log(`storage self-test (IndexedDB): metas, listWorlds order, 40-chunk batch write ${fmt(tw, 1)} ms, 40 parallel reads ` +
+    `${fmt(tr, 1)} ms (one transaction), corrupt record -> RangeError, deleteWorld isolation: <b>ok</b>`);
+}
+
+try {
+  if (phase === 1) {
+    if (storage.backend === 'indexeddb') await storageSelfTest();
+    results.load = await loadWorld('initial load');
+
+    // ---- single-block edits: remesh latency (setBlock -> section uploaded) ----
+    instrumentResults(world);
+    const px = Math.floor(player.x), pz = Math.floor(player.z);
+    const lat = [];
+    const jobLat = [];
+    const edited = new Map();   // 'x,y,z' -> [x, y, z]; final ids are read right before saving
+    const edits = { push: ([x, y, z]) => edited.set(x + ',' + y + ',' + z, [x, y, z]) };
+    const rnd = (() => { let s = 99; return () => ((s = (s * 1103515245 + 12345) >>> 0) / 4294967296); })();
+    for (let i = 0; i < editCount; i++) {
+      // alternate: break the surface block / place a block on top; every 4th edit on a chunk border
+      let x = px + Math.floor(rnd() * 13) - 6;
+      let z = pz + Math.floor(rnd() * 13) - 6;
+      if (i % 4 === 3) x = (x & ~15) + 15;
+      const top = surfaceY(x, z);
+      const place = i % 2 === 0;
+      const y = place ? top + 1 : top;
+      const id = place ? [BLOCK.STONE_BRICKS, BLOCK.GLASS, BLOCK.GLOWSTONE, BLOCK.OAK_PLANKS][i % 4] : BLOCK.AIR;
+      const r = await timedEdit(x, y, z, id);
+      lat.push(r.total);
+      jobLat.push(r.job);
+      edits.push([x, y, z]);
+      await nextFrame();
+    }
+    await waitUntil(() => world.stats().idle, 30000);
+    results.editLatency = {
+      count: lat.length, avgMs: +fmt(lat.reduce((a, b) => a + b, 0) / lat.length, 1), p50Ms: +fmt(pct(lat, 0.5), 1),
+      p95Ms: +fmt(pct(lat, 0.95), 1), maxMs: +fmt(Math.max(...lat), 1),
+      jobAvgMs: +fmt(jobLat.reduce((a, b) => a + b, 0) / jobLat.length, 1), jobMaxMs: +fmt(Math.max(...jobLat), 1),
+    };
+    log(`edit -> section uploaded (${lat.length} edits incl. chunk borders): avg <b>${results.editLatency.avgMs} ms</b>, ` +
+      `p50 ${results.editLatency.p50Ms}, p95 ${results.editLatency.p95Ms}, max ${results.editLatency.maxMs} ms ` +
+      `(worker result back after avg ${results.editLatency.jobAvgMs} ms, max ${results.editLatency.jobMaxMs} ms; ` +
+      `upload happens in the next frame's world.update)`);
+
+    // ---- a monument for the visual check + persistence (east of the spawn) ----
+    const mx = px + 7, mz = pz;
+    const g = surfaceY(mx, mz);
+    const build = [];
+    // a flat grass plaza (17 x 17) cleared of trees around the monument
+    for (let dz = -8; dz <= 8; dz++) {
+      for (let dx = -8; dx <= 8; dx++) {
+        for (let y = g + 1; y <= g + 30; y++) build.push([mx + dx, y, mz + dz, BLOCK.AIR]);
+        for (let y = g - 3; y <= g; y++) build.push([mx + dx, y, mz + dz, y === g ? BLOCK.GRASS_BLOCK : BLOCK.DIRT]);
+      }
+    }
+    for (let dz = -3; dz <= 3; dz++) {
+      for (let dx = -3; dx <= 3; dx++) {
+        const edge = Math.abs(dx) === 3 || Math.abs(dz) === 3;
+        build.push([mx + dx, g + 1, mz + dz, edge ? BLOCK.STONE_BRICKS : BLOCK.OAK_PLANKS]);
+        for (let h = 2; h <= 5; h++) {
+          if (Math.abs(dx) === 3 && Math.abs(dz) === 3) build.push([mx + dx, g + h, mz + dz, BLOCK.OAK_LOG]);
+          else if (edge && h === 3 && (dx === 0 || dz === 0)) build.push([mx + dx, g + h, mz + dz, BLOCK.GLASS]);
+          else if (edge) build.push([mx + dx, g + h, mz + dz, h === 5 ? BLOCK.STONE_BRICKS : BLOCK.BRICKS]);
+        }
+      }
+    }
+    build.push([mx, g + 2, mz, BLOCK.GLOWSTONE], [mx - 2, g + 2, mz - 2, BLOCK.TORCH], [mx + 2, g + 2, mz + 2, BLOCK.TORCH]);
+    for (let y = g + 8; y < g + 12; y++) build.push([mx, y, mz + 6, BLOCK.SAND]);   // falls down (gravity)
+    const tb = performance.now();
+    for (const [x, y, z, id] of build) world.setBlock(x, y, z, id);
+    const buildMs = performance.now() - tb;
+    for (const b of build) edits.push(b);
+
+    // ---- bulk edit like /fill: 16x16x16 = 4096 blocks (a cube of air dug next to the monument) ----
+    const fx = px - 24, fz = pz - 8, fy = surfaceY(fx, fz) - 12;
+    meta.hole = [fx, fy, fz];
+    const tf = performance.now();
+    let filled = 0;
+    for (let y = fy; y < fy + 16; y++) for (let z = fz; z < fz + 16; z++) for (let x = fx; x < fx + 16; x++) {
+      if (world.setBlock(x, y, z, y === fy ? BLOCK.WATER : BLOCK.AIR)) filled++;
+    }
+    const fillMs = performance.now() - tf;
+    resetFrameStats();
+    const tIdle = await waitUntil(() => world.stats().idle, 60000);
+    for (let i = 0; i < 64; i++) edits.push([fx + (i % 16), fy + (i % 16), fz + ((i * 7) % 16)]);
+    results.bulk = { blocks: filled, setBlockLoopMs: +fmt(fillMs, 1), remeshedAndUploadedMs: Math.round(tIdle), monumentBlocks: build.length, monumentMs: +fmt(buildMs, 2), ...frameReport() };
+    log(`bulk: ${build.length}-block plaza + monument set in ${fmt(buildMs, 2)} ms; /fill-style ${filled} blocks: setBlock loop ` +
+      `<b>${fmt(fillMs, 1)} ms</b>, remeshed+uploaded in ${Math.round(tIdle)} ms (update max ${results.bulk.updateMaxMs} ms)`);
+
+    // ---- save, then destroy and reload in-page from IndexedDB ----
+    const modified = world.stats().modified;
+    const ts = performance.now();
+    await world.save();
+    results.save = { chunks: modified, ms: Math.round(performance.now() - ts) };
+    meta.testEdits = [...edited.values()].map(([x, y, z]) => [x, y, z, world.getBlock(x, y, z)]);
+    meta.lastPlayed = Date.now();
+    await storage.saveWorldMeta(meta);
+    log(`save(): ${modified} modified chunks written in <b>${results.save.ms} ms</b>; ${(await storage.getChunkKeys(WORLD_ID)).size} chunks in IndexedDB`);
+    const td = performance.now();
+    await world.destroy();
+    results.destroyMs = Math.round(performance.now() - td);
+    results.sectionsAfterDestroy = renderer.getStats().sections;
+    world = null;
+    results.reload = await loadWorld('in-page reload from storage');
+  } else {
+    results.reload = await loadWorld('phase 2 (after page reload)');
+  }
+
+  // ---- fast flight: stream while the player moves at `fly` blocks/s along +X for 6 s ----
+  const flySpeed = num('fly', 30);
+  if (flySpeed > 0) {
+    let removed = 0;
+    const realRemove = renderer.removeChunk.bind(renderer);
+    renderer.removeChunk = (cx, cz) => { removed++; realRemove(cx, cz); };
+    resetFrameStats();
+    const home = { ...player };
+    let notReady = 0, frames = 0, maxLoaded = 0;
+    const t0 = performance.now();
+    while (performance.now() - t0 < 6000) {
+      await nextFrame();
+      player.x = home.x + flySpeed * (performance.now() - t0) / 1000;
+      cam.x = player.x; cam.y = player.y + 20; cam.z = player.z; cam.yaw = -Math.PI / 2; cam.pitch = -0.2;
+      frames++;
+      if (!world.isAreaReady(player.x, player.z, 1)) notReady++;
+      maxLoaded = Math.max(maxLoaded, world.stats().loaded);
+    }
+    const settleMs = await waitUntil(() => world.stats().idle, 60000);
+    const fr = frameReport();
+    results.fly = { speed: flySpeed, frames, notReadyFrames: notReady, maxLoaded, chunksUnloaded: removed, settleMs: Math.round(settleMs), ...fr };
+    log(`fly ${flySpeed} b/s for 6 s (${Math.round(flySpeed * 6)} blocks): player area not ready in <b>${notReady}/${frames}</b> frames, ` +
+      `max ${maxLoaded} chunks loaded, ${removed} chunk meshes removed behind, idle ${Math.round(settleMs)} ms after stopping` +
+      `\n   world.update(): avg ${fr.updateAvgMs} ms, p95 ${fr.updateP95Ms} ms, max ${fr.updateMaxMs} ms; frame p95 ${fr.intervalP95Ms} ms, frames > 50 ms: ${fr.longFrames}`);
+    renderer.removeChunk = realRemove;
+    player.x = home.x;
+    await nextFrame();
+    await nextFrame();                       // let world.update see the new position first
+    const back = await waitUntil(() => world.stats().idle && world.isAreaReady(player.x, player.z, 2), 60000);
+    results.fly.returnMs = Math.round(back);
+    log(`   back at spawn: area reloaded (edited chunks from the unload-save buffer / IndexedDB) in ${Math.round(back)} ms`);
+  }
+
+  // ---- verify every recorded edit ----
+  let bad = 0;
+  for (const [x, y, z, id] of meta.testEdits) {
+    if (world.getBlock(x, y, z) !== id) {
+      if (bad < 5) console.error(`[world-test] edit lost at ${x},${y},${z}: expected ${id}, got ${world.getBlock(x, y, z)}`);
+      bad++;
+    }
+  }
+  results.verified = { edits: meta.testEdits.length, mismatches: bad };
+  log(`verified ${meta.testEdits.length} recorded edits after reload: <b>${bad === 0 ? 'all present' : bad + ' MISSING'}</b>`);
+  results.pool = pool.getStats();
+
+  if (render) {
+    const px = Math.floor(player.x), pz = Math.floor(player.z);
+    const aim = (x, y, z, tx, ty, tz) => {
+      cam.x = x; cam.y = y; cam.z = z;
+      const dx = tx - x, dy = ty - y, dz = tz - z;
+      cam.yaw = Math.atan2(-dx, -dz);
+      cam.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+    };
+    const mg = surfaceY(px + 7, pz);
+    const views = {
+      monument: () => aim(px - 1.5, mg + 7, pz + 9.5, px + 7.5, mg + 2.5, pz + 0.5),
+      overview: () => aim(px + 0.5, mg + 45, pz + 0.5, px + 0.5, mg - 10, pz - 120),
+      hole: () => {
+        const [hx, hy, hz] = meta.hole ?? [px, 60, pz];
+        aim(hx + 8, hy + 34, hz + 26, hx + 8, hy + 2, hz + 8);
+      },
+    };
+    window.__setView = (name) => {
+      (views[name] ?? views.monument)();
+      return name;
+    };
+    window.__hud = (on) => { hud.style.display = on ? '' : 'none'; return on; };
+    window.__setView(P.get('view') ?? 'monument');
+    await sleep(400);
+  }
+  results.drops = drops;
+  results.rendererStats = { sections: renderer.getStats().sections };
+  console.log('[world-test] RESULTS ' + JSON.stringify(results));
+  window.__done = true;
+} catch (err) {
+  console.error('[world-test] FAILED', err);
+  window.__done = true;
+}
+</script>
+</body>
+</html>

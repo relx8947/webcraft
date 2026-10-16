@@ -1,0 +1,9 @@
+[
+  {"eval": "(async () => { const g = window.__game; const w = await import('/tools/mob-wire.js'); window.__w = w; const r = await w.wire(g); r.spawner.hostileCap = 0; g.setTime(18000); g.debug.lookDeg(0, -20); const types = ['pig','cow','sheep','chicken','zombie','skeleton','creeper','spider']; let n = 0; for (let i = 0; i < 48; i++) { const a = i / 48 * Math.PI * 2, d = 8 + (i % 5) * 3; const x = Math.floor(g.player.x + Math.cos(a) * d) + 0.5, z = Math.floor(g.player.z + Math.sin(a) * d) + 0.5; const y = g.world.getTopY(Math.floor(x), Math.floor(z)) + 1; if (r.mobs.spawnMob(g, types[i % 8], x, y, z, { persistent: true })) n++; } return n; })()"},
+  {"sleep": 2000},
+  {"eval": "window.__game.debug.perf(true) && 'reset'"},
+  {"sleep": 8000},
+  {"eval": "JSON.stringify(window.__game.debug.perf())"},
+  {"eval": "(() => { const g = window.__game; return 'mobs ' + g.entities.countEntities('mob') + ' arrows ' + g.entities.countEntities('arrow') + ' er ' + JSON.stringify(g.renderer.entityRenderer.stats) + ' hp ' + g.player.health; })()"},
+  {"screenshot": "tools/out/mobs/perf-48.png"}
+]

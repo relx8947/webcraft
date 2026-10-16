@@ -1,0 +1,10 @@
+[
+  {"eval": "(async () => { const g = window.__game; await g.debug.waitIdle(20000); return { v: g.version ?? null, fps: g.debug.stats().fps, mode: g.player.mode, diff: g.settings.difficulty }; })()"},
+  {"key": "KeyW", "action": "down"},
+  {"sleep": 1500},
+  {"key": "KeyW", "action": "up"},
+  {"eval": "(async () => { const g = window.__game; g.debug.setTime(14000); for (const m of ['zombie','skeleton','creeper','spider','pig','cow','sheep','chicken']) g.debug.summon(m, 6 + Math.random() * 4); await g.debug.waitIdle(15000); return g.debug.mobs().length; })()"},
+  {"sleep": 4000},
+  {"screenshot": "tools/out/lead-final-smoke-night.png"},
+  {"eval": "(() => { const g = window.__game; const s = g.debug.stats(); return { fps: s.fps, mobs: g.debug.mobs().length, health: g.player.health, dead: g.player.dead, entities: s.entities }; })()"}
+]

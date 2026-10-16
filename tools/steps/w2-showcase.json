@@ -1,0 +1,18 @@
+[
+  {"eval": "__game.debug.waitIdle(60000)"},
+  {"eval": "(async()=>{const g=__game,d=g.debug,p=g.player; d.setMode('creative'); d.setTime(4000); d.hideHud(true); const an=g.entities.list.filter(e=>e.type==='mob'&&!e.removed&&!e.hostile&&!e.frozen); let best=null,bn=0; for(const a of an){ const n=an.filter(b=>Math.hypot(a.x-b.x,a.z-b.z)<10).length; if(n>bn){bn=n;best=a;} } const cl=an.filter(b=>Math.hypot(best.x-b.x,best.z-b.z)<10); const cx=cl.reduce((s,b)=>s+b.x,0)/cl.length, cz=cl.reduce((s,b)=>s+b.z,0)/cl.length, cy=cl.reduce((s,b)=>s+b.y,0)/cl.length; window.__cl=[cx,cy,cz]; await d.tp(cx+5, null, cz+4); p.flying=true; p.setPosition(p.x, Math.max(p.y, cy)+1.6, p.z); d.lookAt(cx, cy+0.4, cz); await d.waitIdle(30000); await d.frames(20); d.lookAt(cx, cy+0.4, cz); return {n:bn, types:cl.map(b=>b.mobType)}})()"},
+  {"sleep": 1500},
+  {"eval": "(()=>{const [cx,cy,cz]=window.__cl; __game.debug.lookAt(cx, cy+0.4, cz); return 1})()"},
+  {"sleep": 300},
+  {"screenshot": "tools/out/w2-animals-meadow.png"},
+  {"eval": "(async()=>{const g=__game,d=g.debug,p=g.player; d.clearMobs(); d.setTime(12700); d.setMode('survival'); p.flying=false; const x0=Math.floor(p.x), z0=Math.floor(p.z); await d.tp(x0, null, z0); await d.frames(5); const y=Math.floor(p.y); for(let dx=-6;dx<=6;dx++) for(let dz=-12;dz<=4;dz++){ d.setBlock(Math.floor(p.x)+dx,y-1,Math.floor(p.z)+dz,'grass_block'); for(let k=0;k<6;k++) d.setBlock(Math.floor(p.x)+dx,y+k,Math.floor(p.z)+dz,'air'); } d.look(0,0); g.spawner.hostileCap=0; await d.frames(3); d.summon('skeleton', 9); window.__s=g.entities.list.find(e=>e.mobType==='skeleton'&&!e.removed); return 'ok'})()"},
+  {"waitFor": "window.__s && window.__s.useTicks > 12", "timeout": 8000},
+  {"eval": "(()=>{const g=__game,s=window.__s; g.debug.lookAt(s.x, s.y+1.4, s.z); return s.useTicks})()"},
+  {"screenshot": "tools/out/w2-skeleton-aiming.png"},
+  {"eval": "(async()=>{const g=__game,d=g.debug,p=g.player; window.__s.remove(); p.health=20; d.setTime(18000); d.setMode('survival'); const x0=Math.floor(p.x), z0=Math.floor(p.z), y=Math.floor(p.y); for(let dx=-2;dx<=2;dx++) for(let dz=-2;dz<=2;dz++){ const edge=Math.abs(dx)===2||Math.abs(dz)===2; d.setBlock(x0+dx,y,z0+dz, edge?'cobblestone':'air'); } d.setBlock(x0+2,y+1,z0,'torch'); d.setBlock(x0-2,y+1,z0,'torch'); d.setBlock(x0,y+1,z0+2,'torch'); d.setBlock(x0,y+1,z0-2,'torch'); p.setPosition(x0+0.5,y,z0+0.5); p.inventory.set(0,{id:296,count:1,damage:0}); d.select(0); const types=['zombie','zombie','spider','skeleton','zombie','zombie']; types.forEach((t,i)=>{ const a=i/types.length*Math.PI*2; g.spawnMob(t, x0+0.5+Math.cos(a)*9, y, z0+0.5+Math.sin(a)*9, {persistent:true}); }); g.perspective=1; d.lookDeg(20,-25); await d.frames(5); return 'ok'})()"},
+  {"sleep": 1400},
+  {"screenshot": "tools/out/w2-night-base-f5.png"},
+  {"eval": "(async()=>{const g=__game,d=g.debug; g.perspective=2; await d.frames(3); return 1})()"},
+  {"sleep": 600},
+  {"screenshot": "tools/out/w2-night-base-f5-front.png"}
+]

@@ -1,0 +1,14 @@
+[
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"eval": "(async()=>{const g=__game,d=g.debug,p=g.player; g.applySettings({difficulty:'normal'}); d.setTime(14000); d.clearMobs(); g.spawner.hostileCap=0; const x0=Math.floor(p.x), z0=Math.floor(p.z), y=Math.floor(p.y); for(let dx=-7;dx<=7;dx++) for(let dz=-14;dz<=4;dz++){ d.setBlock(x0+dx,y-1,z0+dz,'grass_block'); d.setBlock(x0+dx,y-2,z0+dz,'dirt'); for(let k=0;k<6;k++) d.setBlock(x0+dx,y+k,z0+dz,'air'); } window.__c0=[x0,y,z0]; d.look(0,0); const a=g.audio; window.__snd=[]; const o=a.play.bind(a); a.play=(n,op)=>{window.__snd.push(n); return o(n,op)}; await d.frames(3); return d.summon('creeper', 8)})()"},
+  {"sleep": 2300},
+  {"eval": "(()=>{const g=__game,p=g.player; const c=g.entities.list.find(e=>e.mobType==='creeper'&&!e.removed); return c? {dist:+Math.hypot(c.x-p.x,c.z-p.z).toFixed(2), dy:+(c.y-p.y).toFixed(2), swell:c.swell}: 'gone'})()"},
+  {"screenshot": "tools/out/w2int/creeper-swell.png"},
+  {"waitFor": "!__game.entities.list.some(e=>e.mobType==='creeper'&&!e.removed) || __game.player.dead", "timeout": 8000},
+  {"sleep": 300},
+  {"eval": "(()=>{const g=__game,p=g.player; return {hp:+p.health.toFixed(1), dead:p.dead, screen:g.ui.currentScreen, text:(document.querySelector('#ui-root')?.innerText||'').replace(/\\s+/g,' ').slice(0,60), sounds:[...new Set(window.__snd)]}})()"},
+  {"screenshot": "tools/out/w2int/creeper-death.png"},
+  {"eval": "(async()=>{const g=__game,d=g.debug,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } d.setTime(6000); d.hideHud(true); const [x0,y,z0]=window.__c0; await d.tp(x0+0.5, y+4, z0+6.5); p.flying=true; d.lookAt(x0+0.5, y-1, z0-4.5); await d.frames(10); return {hp:p.health, dead:p.dead}})()"},
+  {"sleep": 800},
+  {"screenshot": "tools/out/w2int/creeper-crater.png"}
+]

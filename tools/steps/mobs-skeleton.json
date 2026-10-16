@@ -1,0 +1,12 @@
+[
+  {"eval": "(async () => { const g = window.__game; const w = await import('/tools/mob-wire.js'); window.__w = w; const r = await w.wire(g); r.spawner.hostileCap = 0; g.setTime(18000); g.debug.lookDeg(0, -6); return g.player.health; })()"},
+  {"eval": "(() => { const g = window.__game; const s = window.__w.spawnInFront(g, 'skeleton', 9, 1); window.__s = s; return [s.x, s.y, s.z]; })()"},
+  {"sleep": 1300},
+  {"screenshot": "tools/out/mobs/skeleton-1.png"},
+  {"sleep": 400},
+  {"screenshot": "tools/out/mobs/skeleton-2.png"},
+  {"eval": "(() => { const g = window.__game, s = window.__s; return 'use ' + s.useTicks + ' arrows ' + g.entities.countEntities('arrow') + ' hp ' + g.player.health + ' target ' + !!s.target; })()"},
+  {"sleep": 4000},
+  {"screenshot": "tools/out/mobs/skeleton-3.png"},
+  {"eval": "(() => { const g = window.__game, s = window.__s; return 'arrows ' + g.entities.countEntities('arrow') + ' hp ' + g.player.health + ' dist ' + Math.hypot(s.x - g.player.x, s.z - g.player.z).toFixed(1); })()"}
+]

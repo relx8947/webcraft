@@ -1,0 +1,9 @@
+[
+  {"eval": "(async () => { const g = window.__game; const p = g.player; const x = Math.floor(p.x), z = Math.floor(p.z), y = g.world.getTopY(x, z) + 1; for (let dy = 0; dy < 3; dy++) g.debug.setBlock(x, y + dy, z - 2, 'stone'); g.debug.setBlock(x, y, z - 1, 'air'); g.debug.setBlock(x, y + 1, z - 1, 'air'); g.player.inventory.set(g.player.selectedSlot, { id: 46, count: 8, damage: 0 }); g.player.inventory.changed(); g.debug.tp(x + 0.5, y, z + 0.5); g.debug.look(0, 0.15); await g.debug.waitIdle(15000); return { x, y, z, target: g.interaction.target }; })()"},
+  {"click": [640, 360], "button": "right"},
+  {"sleep": 400},
+  {"eval": "(() => { const g = window.__game; const p = g.player; const x = Math.floor(p.x), z = Math.floor(p.z); const out = []; for (let dy = -1; dy < 4; dy++) out.push(g.debug.getBlock(x, Math.floor(p.y) + dy, z - 1)); return out; })()"},
+  {"eval": "(async () => { const g = window.__game; g.debug.setTime(18000); g.debug.look(0.4, 0.0); await g.debug.waitIdle(15000); return g.debug.stats().fps; })()"},
+  {"sleep": 600},
+  {"screenshot": "tools/out/lead-walltorch.png"}
+]

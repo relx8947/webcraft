@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebCraft texture preview</title>
+<link rel="icon" href="data:,">
+<style>
+  body { margin: 0; padding: 12px 16px; background: #2b2b2b; color: #ddd; font: 12px/1.3 Consolas, monospace; }
+  h2 { margin: 18px 0 8px; font-size: 15px; color: #fff; border-bottom: 1px solid #555; padding-bottom: 4px; }
+  .grid { display: flex; flex-wrap: wrap; gap: 10px 8px; align-items: flex-start; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .cell .name { max-width: 150px; text-align: center; word-break: break-all; color: #bbb; }
+  .cell .meta { color: #888; font-size: 10px; }
+  canvas, img { image-rendering: pixelated; display: block; }
+  .checker { background: repeating-conic-gradient(#9a9a9a 0 25%, #c8c8c8 0 50%) 0 0 / 16px 16px; }
+  .pair { display: flex; gap: 4px; }
+  .slot-light { background: #8b8b8b; border: 2px solid; border-color: #373737 #fff #fff #373737; padding: 2px; }
+  .slot-dark { background: #1c1c1c; border: 2px solid #000; padding: 2px; }
+  #stats { color: #9f9; }
+  .strip { display: flex; gap: 2px; }
+</style>
+</head>
+<body>
+<div id="stats">generating…</div>
+<div id="root"></div>
+<script type="module">
+import { generateTextures, getLayerAlphaModes, buildMipChain, generateMiscTextures, IconFactory } from '../src/render/textures.js';
+import { TEXTURES, BLOCKS, TINT_TYPE, TINT, ALL_ITEM_IDS, itemDisplayName, getItem } from '../src/world/registry.js';
+import { DEFAULT_TINTS } from '../src/config.js';
+
+const params = new URLSearchParams(location.search);
+const SECTIONS = (params.get('section') ?? 'wave2,textures,tiles,wall,icons,misc,mips,cracks').split(',');
+const SCALE = Number(params.get('scale') ?? 4);
+const FILTER = params.get('filter') ? new RegExp(params.get('filter')) : null;
+const root = document.getElementById('root');
+
+const t0 = performance.now();
+const tex = generateTextures();
+const tGen = performance.now() - t0;
+const modes = getLayerAlphaModes();
+const t1 = performance.now();
+const mips = buildMipChain(tex.data, tex.size, tex.layers, modes);
+const tMip = performance.now() - t1;
+const t2 = performance.now();
+const misc = generateMiscTextures();
+const tMisc = performance.now() - t2;
+console.log(`generateTextures ${tGen.toFixed(1)} ms, buildMipChain ${tMip.toFixed(1)} ms, generateMiscTextures ${tMisc.toFixed(1)} ms`);
+document.getElementById('stats').textContent =
+  `layers ${tex.layers} · generateTextures ${tGen.toFixed(1)} ms · buildMipChain ${tMip.toFixed(1)} ms · misc ${tMisc.toFixed(1)} ms`;
+
+// Tint used for a texture name: from the first block that uses it.
+const tintByName = new Map();
+for (const b of BLOCKS) {
+  if (!b.faces || !b.tint) continue;
+  const tint = DEFAULT_TINTS[b.tint];
+  for (const n of b.faces) {
+    const t = TEXTURES.find((e) => e.name === n);
+    if (t && t.tinted && !tintByName.has(n)) tintByName.set(n, tint);
+  }
+}
+
+function layerPixels(layer, { level = 0, tint = null, mode = 'raw' } = {}) {
+  if (mode === 'raw' && modes[layer] === 'tintmask') mode = 'tintmask-raw';
+  const src = mips[level];
+  const s = tex.size >> level;
+  const n = s * s;
+  const out = new Uint8ClampedArray(n * 4);
+  for (let i = 0; i < n; i++) {
+    const j = (layer * n + i) * 4;
+    let r = src[j], g = src[j + 1], b = src[j + 2], a = src[j + 3];
+    if (mode === 'tintmask') {
+      const k = a / 255;
+      if (tint) { r *= tint[0] / 255 + (1 - tint[0] / 255) * k; g *= tint[1] / 255 + (1 - tint[1] / 255) * k; b *= tint[2] / 255 + (1 - tint[2] / 255) * k; }
+      a = 255;
+    } else if (mode === 'tintmask-raw') { a = 255;
+    } else if (tint) { r *= tint[0] / 255; g *= tint[1] / 255; b *= tint[2] / 255; }
+    out[i * 4] = r; out[i * 4 + 1] = g; out[i * 4 + 2] = b; out[i * 4 + 3] = a;
+  }
+  return { px: out, s };
+}
+
+function canvasFrom(px, s, scale, cls = '') {
+  const small = document.createElement('canvas');
+  small.width = small.height = s;
+  small.getContext('2d').putImageData(new ImageData(px, s, s), 0, 0);
+  const c = document.createElement('canvas');
+  c.width = c.height = s * scale;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(small, 0, 0, s * scale, s * scale);
+  if (cls) c.className = cls;
+  return c;
+}
+
+function cell(children, name, meta) {
+  const d = document.createElement('div');
+  d.className = 'cell';
+  const row = document.createElement('div');
+  row.className = 'pair';
+  for (const ch of children) row.append(ch);
+  d.append(row);
+  const n = document.createElement('div'); n.className = 'name'; n.textContent = name; d.append(n);
+  if (meta) { const m = document.createElement('div'); m.className = 'meta'; m.textContent = meta; d.append(m); }
+  return d;
+}
+
+function section(title) {
+  const h = document.createElement('h2'); h.textContent = title; root.append(h);
+  const g = document.createElement('div'); g.className = 'grid'; root.append(g);
+  return g;
+}
+
+const entries = TEXTURES.filter((t) => !FILTER || FILTER.test(t.name));
+const layerByName = (n) => TEXTURES.find((e) => e.name === n).layer;
+
+/** Sub-rectangle [x0..x1] x [y0..y1] (texels, inclusive) of a texture, scaled. */
+function subRect(name, x0, y0, x1, y1, scale, cls = '') {
+  const { px } = layerPixels(layerByName(name));
+  const w = x1 - x0 + 1, h = y1 - y0 + 1;
+  const out = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = ((y0 + y) * 16 + x0 + x) * 4, o = (y * w + x) * 4;
+    out[o] = px[i]; out[o + 1] = px[i + 1]; out[o + 2] = px[i + 2]; out[o + 3] = px[i + 3];
+  }
+  const small = document.createElement('canvas');
+  small.width = w; small.height = h;
+  small.getContext('2d').putImageData(new ImageData(out, w, h), 0, 0);
+  const c = document.createElement('canvas');
+  c.width = w * scale; c.height = h * scale;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(small, 0, 0, w * scale, h * scale);
+  if (cls) c.className = cls;
+  return c;
+}
+
+if (SECTIONS.includes('wave2')) {
+  // Wave 2 art in context (docs/SPEC-wave2.md §7).
+  const g = section('Wave 2 in context');
+  // Chest faces: the mesher maps each texture in full onto the 14/16 box; the lock box samples
+  // u 7..9 / v 4..8 of the front (shown enlarged on the right).
+  g.append(cell([subRect('chest_front', 0, 0, 15, 15, 7), subRect('chest_side', 0, 0, 15, 15, 7), subRect('chest_top', 0, 0, 15, 15, 7),
+    subRect('chest_front', 7, 4, 8, 7, 16)], 'chest faces', 'front · side · top · lock texels'));
+  g.append(cell([subRect('furnace_front', 0, 0, 15, 15, 8), subRect('furnace_front_on', 0, 0, 15, 15, 8)], 'furnace', 'off · lit'));
+  // Crop growth: every stage standing on farmland (side view: dirt below, the farmland top 1 px lower).
+  {
+    const sc = 5, cw = 16 * sc;
+    const c = document.createElement('canvas');
+    c.width = cw * 8 + 7 * 4; c.height = 32 * sc;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#86aef8';
+    ctx.fillRect(0, 0, c.width, c.height);
+    const dirt = canvasFrom(layerPixels(layerByName('dirt')).px, 16, 1);
+    for (let s = 0; s < 8; s++) {
+      const x = s * (cw + 4);
+      ctx.drawImage(dirt, 0, 1, 16, 15, x, 17 * sc, cw, 15 * sc);
+      ctx.drawImage(canvasFrom(layerPixels(layerByName(s % 2 ? 'farmland_moist' : 'farmland')).px, 16, 1), 0, 0, 16, 1, x, 16 * sc, cw, sc);
+      ctx.drawImage(canvasFrom(layerPixels(layerByName(`wheat_stage_${s}`)).px, 16, 1), x, 1 * sc, cw, cw);
+    }
+    g.append(cell([c], 'wheat_stage_0..7 on farmland', 'side view, dry / moist alternating'));
+  }
+  // Farmland fields (3x3 tiles) dry and moist.
+  for (const n of ['farmland', 'farmland_moist']) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 144;
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    const sm = canvasFrom(layerPixels(layerByName(n)).px, 16, 1);
+    for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) ctx.drawImage(sm, i * 48, j * 48, 48, 48);
+    g.append(cell([c], `${n} field`));
+  }
+  g.append(cell(['bow', 'bow_pulling_0', 'bow_pulling_1', 'bow_pulling_2', 'arrow'].map((n) => subRect(n, 0, 0, 15, 15, 6, 'checker')),
+    'bow draw sequence + arrow', 'bow · pulling_0 · pulling_1 · pulling_2 · arrow'));
+  const eggs = TEXTURES.filter((t) => t.name.endsWith('_spawn_egg')).map((t) => subRect(t.name, 0, 0, 15, 15, 5, 'checker'));
+  g.append(cell(eggs, 'spawn eggs', eggs.length + ' mobs'));
+  // Large GUI icons (48 px art shown x2) on inventory slots.
+  const icons = new IconFactory(tex);
+  const ICON_NAMES = ['chest', 'furnace', 'wheat_seeds', 'wheat', 'bread', 'mutton', 'cooked_mutton', 'chicken', 'cooked_chicken',
+    'spider_eye', 'bow', 'arrow', 'wooden_hoe', 'iron_hoe', 'diamond_hoe', 'zombie_spawn_egg', 'creeper_spawn_egg'];
+  const row = [];
+  for (const n of ICON_NAMES) {
+    const it = ALL_ITEM_IDS.map(getItem).find((x) => x.name === n);
+    if (!it) continue;
+    const img = document.createElement('img');
+    img.src = icons.getIcon(it.id);
+    img.width = 96;
+    img.className = 'slot-light';
+    img.title = `${n} ${itemDisplayName(it.id)}`;
+    row.push(img);
+  }
+  const wrap = document.createElement('div');
+  wrap.className = 'grid';
+  for (const r of row) wrap.append(r);
+  g.append(cell([wrap], 'icons x2 (GUI scale 6)'));
+}
+
+if (SECTIONS.includes('textures')) {
+  const g = section(`Textures (×${SCALE})`);
+  for (const t of entries) {
+    const cls = t.alphaMode === 'opaque' ? '' : 'checker';
+    if (t.frames > 1) {
+      const strip = document.createElement('div'); strip.className = 'strip';
+      for (let f = 0; f < t.frames; f++) strip.append(canvasFrom(layerPixels(t.layer + f).px, 16, Math.max(2, SCALE - 1), cls));
+      g.append(cell([strip], t.name, `${t.alphaMode}, ${t.frames} frames`));
+      continue;
+    }
+    const kids = [canvasFrom(layerPixels(t.layer).px, 16, SCALE, cls)];
+    const tint = tintByName.get(t.name);
+    if (t.alphaMode === 'tintmask') kids.push(canvasFrom(layerPixels(t.layer, { tint, mode: 'tintmask' }).px, 16, SCALE));
+    else if (tint) kids.push(canvasFrom(layerPixels(t.layer, { tint }).px, 16, SCALE, cls));
+    g.append(cell(kids, t.name, t.alphaMode + (t.tinted ? ' · tinted' : '')));
+  }
+}
+
+if (SECTIONS.includes('tiles')) {
+  const g = section('Tiling check (3×3, ×2)');
+  for (const t of entries) {
+    if (t.kind !== 'block') continue;
+    const tint = tintByName.get(t.name);
+    const { px } = layerPixels(t.layer, { tint, mode: t.alphaMode === 'tintmask' ? 'tintmask' : 'raw' });
+    const c = document.createElement('canvas');
+    c.width = c.height = 96;
+    if (t.alphaMode !== 'opaque' && t.alphaMode !== 'tintmask') c.className = 'checker';
+    const ctx = c.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    const small = canvasFrom(px, 16, 1);
+    for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) ctx.drawImage(small, i * 32, j * 32, 32, 32);
+    g.append(cell([c], t.name));
+  }
+}
+
+if (SECTIONS.includes('wall')) {
+  // A terrain "cross-section" made of side faces, to judge how the palettes work together.
+  const g = section('Terrain wall (side faces, shade 0.8, ×3)');
+  const W = 12, H = 10, sc = 3;
+  const c = document.createElement('canvas');
+  c.width = W * 16 * sc; c.height = H * 16 * sc;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const L = (n) => TEXTURES.find((t) => t.name === n).layer;
+  const pick = (x, y) => {
+    if (y === 0) return x % 5 === 3 ? 'oak_log' : x % 5 === 4 ? 'birch_log' : null;
+    if (y === 1) return x > 7 ? 'grass_block_snow' : 'grass_block_side';
+    if (y <= 2) return 'dirt';
+    if (y === 3) return x % 4 === 1 ? 'gravel' : 'dirt';
+    const ores = ['coal_ore', 'iron_ore', 'stone', 'stone', 'gold_ore', 'stone', 'granite', 'andesite', 'stone', 'diorite', 'lapis_ore', 'redstone_ore', 'diamond_ore'];
+    if (y === H - 1) return 'bedrock';
+    return ores[(x * 7 + y * 3) % ores.length];
+  };
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const n = pick(x, y);
+    if (!n) continue;
+    const t = TEXTURES.find((e) => e.name === n);
+    const tint = tintByName.get(n);
+    const { px } = layerPixels(L(n), { tint, mode: t.alphaMode === 'tintmask' ? 'tintmask' : 'raw' });
+    for (let i = 0; i < px.length; i += 4) { px[i] *= 0.8; px[i + 1] *= 0.8; px[i + 2] *= 0.8; }
+    ctx.drawImage(canvasFrom(px, 16, 1), x * 16 * sc, y * 16 * sc, 16 * sc, 16 * sc);
+  }
+  c.style.background = '#79a6ff';
+  g.append(c);
+  // Building blocks wall
+  const names = ['cobblestone', 'mossy_cobblestone', 'stone_bricks', 'mossy_stone_bricks', 'cracked_stone_bricks', 'bricks',
+    'oak_planks', 'birch_planks', 'spruce_planks', 'sandstone', 'bookshelf', 'crafting_table_front', 'furnace_front', 'tnt_side',
+    'pumpkin_side', 'jack_o_lantern', 'glowstone', 'obsidian', 'iron_block', 'gold_block', 'diamond_block', 'coal_block', 'lapis_block', 'clay'];
+  const c2 = document.createElement('canvas');
+  const cols = 8, rows = Math.ceil(names.length / cols) * 2;
+  c2.width = cols * 16 * sc; c2.height = rows * 16 * sc;
+  const ctx2 = c2.getContext('2d'); ctx2.imageSmoothingEnabled = false;
+  names.forEach((n, k) => {
+    const x = k % cols, y = Math.floor(k / cols) * 2;
+    const { px } = layerPixels(L(n));
+    const sm = canvasFrom(px, 16, 1);
+    ctx2.drawImage(sm, x * 16 * sc, y * 16 * sc, 16 * sc, 16 * sc);
+    ctx2.drawImage(sm, x * 16 * sc, (y + 1) * 16 * sc, 16 * sc, 16 * sc);
+  });
+  g.append(c2);
+}
+
+if (SECTIONS.includes('icons')) {
+  const g = section('Icons (IconFactory, 48×48) on light / dark slots');
+  const icons = new IconFactory(tex);
+  const ids = ALL_ITEM_IDS.filter((id) => !FILTER || FILTER.test(getItem(id).name));
+  for (const id of ids) {
+    const url = icons.getIcon(id);
+    const a = document.createElement('img'); a.src = url; a.width = 48 * (SCALE >= 6 ? 2 : 1); a.className = 'slot-light';
+    const b = document.createElement('img'); b.src = url; b.width = 48 * (SCALE >= 6 ? 2 : 1); b.className = 'slot-dark';
+    g.append(cell([a, b], getItem(id).name, itemDisplayName(id)));
+  }
+}
+
+if (SECTIONS.includes('misc')) {
+  const g = section('Sky textures');
+  for (const k of ['sun', 'moon']) {
+    const m = misc[k];
+    const c = canvasFrom(new Uint8ClampedArray(m.data), m.width, 6, 'checker');
+    const d = canvasFrom(new Uint8ClampedArray(m.data), m.width, 6);
+    d.style.background = '#0b1030';
+    g.append(cell([c, d], `${k} ${m.width}×${m.height}`));
+  }
+  const cl = misc.clouds;
+  const px = new Uint8ClampedArray(cl.width * cl.height * 4);
+  for (let i = 0; i < cl.data.length; i++) { px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = 255; px[i * 4 + 3] = cl.data[i]; }
+  const small = document.createElement('canvas'); small.width = cl.width; small.height = cl.height;
+  small.getContext('2d').putImageData(new ImageData(px, cl.width, cl.height), 0, 0);
+  const big = document.createElement('canvas'); big.width = 512; big.height = 512;
+  const bctx = big.getContext('2d'); bctx.imageSmoothingEnabled = false;
+  bctx.fillStyle = '#7ba4ff'; bctx.fillRect(0, 0, 512, 512);
+  for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) bctx.drawImage(small, i * 256, j * 256);
+  let cov = 0; for (const v of cl.data) if (v) cov++;
+  g.append(cell([big], `clouds ${cl.width}×${cl.height} tiled 2×2`, `coverage ${(100 * cov / cl.data.length).toFixed(1)}%`));
+}
+
+if (SECTIONS.includes('mips')) {
+  const g = section('Mip chains (levels 0–4, each shown at 64 px)');
+  const names = ['oak_leaves', 'spruce_leaves', 'short_grass', 'glass', 'grass_block_side', 'grass_block_top', 'torch', 'water_still', 'destroy_stage_5', 'cobblestone', 'poppy', 'diamond_pickaxe', 'wheat_stage_3', 'wheat_stage_7', 'farmland', 'chest_front'];
+  for (const n of names) {
+    const t = TEXTURES.find((e) => e.name === n);
+    const kids = [];
+    for (let lv = 0; lv < mips.length; lv++) {
+      const tint = tintByName.get(n);
+      const { px, s } = layerPixels(t.layer, { level: lv, tint, mode: t.alphaMode === 'tintmask' ? 'tintmask' : 'raw' });
+      kids.push(canvasFrom(px, s, 64 / s, t.alphaMode === 'opaque' || t.alphaMode === 'tintmask' ? '' : 'checker'));
+    }
+    g.append(cell(kids, n, t.alphaMode));
+  }
+}
+
+if (SECTIONS.includes('cracks')) {
+  const g = section('Destroy stages over stone (multiply blend 2·src·dst, alpha mixes with neutral 0.5)');
+  const stone = layerPixels(TEXTURES.find((e) => e.name === 'stone').layer).px;
+  for (let s = 0; s < 10; s++) {
+    const t = TEXTURES.find((e) => e.name === `destroy_stage_${s}`);
+    const { px } = layerPixels(t.layer);
+    const out = new Uint8ClampedArray(px.length);
+    for (let i = 0; i < px.length; i += 4) {
+      const a = px[i + 3] / 255;
+      for (let k = 0; k < 3; k++) {
+        const src = (0.5 + (px[i + k] / 255 - 0.5) * a);
+        out[i + k] = 2 * src * stone[i + k];
+      }
+      out[i + 3] = 255;
+    }
+    g.append(cell([canvasFrom(px, 16, SCALE, 'checker'), canvasFrom(out, 16, SCALE)], `stage ${s}`));
+  }
+}
+
+window.__done = true;
+</script>
+</body>
+</html>

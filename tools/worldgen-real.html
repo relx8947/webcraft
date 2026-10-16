@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebCraft worldgen — real renderer preview</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; left: 6px; top: 4px; color: #fff; font: 12px/1.35 monospace; text-shadow: 1px 1px 0 #000;
+         white-space: pre; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">loading…</div>
+<script type="module">
+// Renders terrain from src/world/worldgen.js through the real engine modules (lighting.js, mesher.js,
+// renderer.js, textures.js), imported dynamically so this page degrades gracefully while those modules
+// are being written. URL parameters:
+//   seed (default 12345)   x, z: target column   yaw, pitch (deg; yaw 0 = looking north)   dist, up: camera
+//   offset from the target   cx, cy, cz: explicit eye position   rd: chunk radius (default 7)   time 0..1
+import { WorldGenerator, parseSeed } from '../src/world/worldgen.js';
+import { computeDaylight } from '../src/config.js';
+
+const P = new URLSearchParams(location.search);
+const num = (k, d) => (P.has(k) && Number.isFinite(Number(P.get(k))) ? Number(P.get(k)) : d);
+const hud = document.getElementById('hud');
+const DEG = Math.PI / 180;
+const seedText = P.get('seed') ?? '12345';
+const gen = new WorldGenerator(parseSeed(seedText));
+
+async function main() {
+  let L, M, R, T;
+  try {
+    [L, M, R, T] = await Promise.all([
+      import('../src/world/lighting.js'), import('../src/world/mesher.js'),
+      import('../src/render/renderer.js'), import('../src/render/textures.js'),
+    ]);
+  } catch (e) {
+    hud.textContent = 'engine modules not available yet: ' + e.message + '\nuse tools/worldgen-map.html instead';
+    console.warn('[worldgen-real] engine modules unavailable:', e.message);
+    window.__ready = true;
+    return;
+  }
+  const rd = num('rd', 7);
+  const yaw = num('yaw', 0) * DEG;
+  const pitch = num('pitch', -15) * DEG;
+  const tx = num('x', 0);
+  const tz = num('z', 0);
+  let eye;
+  if (P.has('cx')) eye = { x: num('cx', 0), y: num('cy', 100), z: num('cz', 0) };
+  else {
+    const dist = num('dist', 40);
+    const fx = -Math.sin(yaw);
+    const fz = -Math.cos(yaw);
+    const ex = tx - fx * dist;
+    const ez = tz - fz * dist;
+    const h = Math.max(63, gen.sampleColumn(ex, ez).height, gen.sampleColumn(tx, tz).height);
+    eye = { x: ex, y: h + num('up', 20), z: ez };
+  }
+  const ccx = Math.floor(eye.x / 16);
+  const ccz = Math.floor(eye.z / 16);
+
+  // 1. generate (radius rd + 1 so every meshed chunk has its neighbours)
+  const t0 = performance.now();
+  const chunks = new Map();
+  for (let dz = -rd - 1; dz <= rd + 1; dz++) {
+    for (let dx = -rd - 1; dx <= rd + 1; dx++) chunks.set((ccx + dx) + ',' + (ccz + dz), gen.generateChunk(ccx + dx, ccz + dz));
+  }
+  const tGen = performance.now() - t0;
+
+  // 2. renderer + textures
+  const textures = T.generateTextures();
+  let misc;
+  try { misc = T.generateMiscTextures(); } catch (e) { console.warn('misc textures unavailable', e.message); }
+  const canvas = document.getElementById('c');
+  const renderer = new R.Renderer(canvas, {
+    textures, misc, EntityRendererClass: null,
+    buildMipChain: T.buildMipChain, alphaModes: T.getLayerAlphaModes ? T.getLayerAlphaModes() : undefined,
+  });
+  renderer.resize(window.innerWidth, window.innerHeight, window.devicePixelRatio || 1);
+
+  // 3. light + mesh + upload
+  const t1 = performance.now();
+  let region = null;
+  let light = null;
+  let sections = 0;
+  for (let dz = -rd; dz <= rd; dz++) {
+    for (let dx = -rd; dx <= rd; dx++) {
+      const cx = ccx + dx;
+      const cz = ccz + dz;
+      const nb = [];
+      for (let oz = -1; oz <= 1; oz++) for (let ox = -1; ox <= 1; ox++) nb.push(chunks.get((cx + ox) + ',' + (cz + oz)));
+      region = L.buildRegion(nb, region || undefined);
+      light = L.computeLight(region, light || undefined);
+      const secs = M.meshChunk(region, light, 0xffff, gen.getTints(cx, cz), { smoothLighting: true });
+      for (const s of secs) {
+        if (s.opaque || s.cutout || s.translucent) {
+          renderer.setSectionMesh(cx, s.sy, cz, s.opaque, s.cutout, s.translucent);
+          sections++;
+        }
+      }
+    }
+  }
+  const tMesh = performance.now() - t1;
+
+  const timeOfDay = num('time', 0.22);
+  const frame = {
+    camera: { x: eye.x, y: eye.y, z: eye.z, yaw, pitch, roll: 0, fov: num('fov', 70) },
+    timeOfDay, daylight: computeDaylight(timeOfDay), time: 0, renderDistance: rd,
+    underwater: false, inLava: false, clouds: P.get('clouds') !== '0',
+    selection: null, breaking: null, entities: [], particles: null, hand: null,
+  };
+  const biome = gen.getBiome(tx, tz);
+  let frames = 0;
+  function draw() {
+    frame.time = performance.now() / 1000;
+    renderer.render(frame);
+    if (++frames === 8) {
+      hud.textContent = `worldgen real-render  seed "${seedText}"  eye ${eye.x.toFixed(0)},${eye.y.toFixed(0)},${eye.z.toFixed(0)}  ` +
+        `target biome ${biome.displayName}\nchunks ${chunks.size} generated in ${tGen.toFixed(0)} ms ` +
+        `(${(tGen / chunks.size).toFixed(2)} ms/chunk), light+mesh ${tMesh.toFixed(0)} ms, ${sections} sections`;
+      window.__ready = true;
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+}
+main().catch((e) => {
+  console.error(e);
+  hud.textContent = 'error: ' + e.message;
+});
+</script>
+</body>
+</html>

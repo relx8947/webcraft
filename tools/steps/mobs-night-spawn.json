@@ -1,0 +1,8 @@
+[
+  {"eval": "(async () => { const g = window.__game; const w = await import('/tools/mob-wire.js'); window.__w = w; await w.wire(g); g.setTime(13500); g.debug.perf(true); return 'mobs ' + g.entities.countEntities('mob'); })()"},
+  {"sleep": 30000},
+  {"eval": "(() => { const g = window.__game, p = g.player; const hs = g.entities.list.filter(e => e.type === 'mob' && e.hostile); const near = hs.filter(m => Math.hypot(m.x - p.x, m.z - p.z) < 128); const kinds = {}; for (const m of near) kinds[m.mobType] = (kinds[m.mobType] ?? 0) + 1; const surf = near.filter(m => m.y > g.world.getTopY(Math.floor(m.x), Math.floor(m.z)) - 1).length; return JSON.stringify({ hostiles: near.length, kinds, surface: surf, caves: near.length - surf, stats: g.spawner.stats, hp: p.health, perf: g.debug.perf() }); })()"},
+  {"eval": "(() => { const g = window.__game; g.debug.lookDeg(45, -5); g.ui?.setHudHidden?.(false); return 1; })()"},
+  {"sleep": 500},
+  {"screenshot": "tools/out/mobs/night-spawn.png"}
+]

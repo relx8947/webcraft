@@ -1,0 +1,21 @@
+[
+  { "waitFor": "window.__done === true", "timeout": 240000 },
+  { "eval": "window.__hud(false)" },
+  { "eval": "window.__setView('monument')" },
+  { "sleep": 400 },
+  { "screenshot": "tools/out/world-monument.png" },
+  { "eval": "window.__setView('overview')" },
+  { "sleep": 600 },
+  { "screenshot": "tools/out/world-overview.png" },
+  { "eval": "window.__setView('hole')" },
+  { "sleep": 400 },
+  { "screenshot": "tools/out/world-hole.png" },
+  { "eval": "Object.assign(window.__frameState, { timeOfDay: 0.78, daylight: 0.2 }); window.__setView('monument')" },
+  { "sleep": 400 },
+  { "screenshot": "tools/out/world-monument-night.png" },
+  { "eval": "Object.assign(window.__frameState, { timeOfDay: 0.3, daylight: 1 }); window.__world.setSmoothLighting(false); true" },
+  { "waitFor": "window.__world.stats().idle", "timeout": 30000 },
+  { "sleep": 300 },
+  { "screenshot": "tools/out/world-monument-flat.png" },
+  { "eval": "JSON.stringify(window.__world.stats())" }
+]

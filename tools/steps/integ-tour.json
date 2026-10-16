@@ -1,0 +1,22 @@
+[
+  {"waitFor": "window.__ready", "timeout": 90000},
+  {"eval": "window.__shot = async (x, z, o = {}) => { const g=__game, d=g.debug; await d.tp(x, null, z); const p=g.player; if (o.up) p.setPosition(p.x, p.y + o.up, p.z); if (o.y !== undefined) p.setPosition(p.x, o.y, p.z); p.flying = true; d.setTime(o.time ?? 6000); d.lookDeg(o.yaw ?? 0, o.pitch ?? 0); d.hideHud(!!o.hideHud); await d.waitIdle(30000); await d.frames(20); return {pos:[p.x.toFixed(1), p.y.toFixed(1), p.z.toFixed(1)], biome: g.world.getBiome(Math.floor(p.x), Math.floor(p.z)).name}; }; 1"},
+  {"eval": "window.__inner = (name, maxDist = 3000) => { const g=__game, gen=g.world.generator; const f=g.debug.findBiome(name, maxDist); if (!f) return null; const same=(x,z)=>gen.getBiome(x,z).name===name; let best=f, bestScore=-1; for (let dz=-160; dz<=160; dz+=32) for (let dx=-160; dx<=160; dx+=32) { const x=f.x+dx, z=f.z+dz; if (!same(x,z)) continue; let s=0; for (let k=-2;k<=2;k++) for (let l=-2;l<=2;l++) if (same(x+k*24, z+l*24)) s++; const h=gen.sampleColumn(x,z).height; if (s>bestScore && h > 60) { bestScore=s; best={x,z,score:s,h:Math.round(h)}; } } return best; }; 1"},
+  {"eval": "(()=>{const o={}; for (const b of ['desert','snowy_plains','snowy_taiga','mountains','snowy_peaks','ocean','taiga','birch_forest','flower_forest']) o[b]=__inner(b); window.__B=o; return o})()"},
+  {"eval": "__shot(__B.desert.x, __B.desert.z, {time: 5000, yaw: 200, pitch: -12, up: 8, hideHud: true})"},
+  {"screenshot": "tools/out/integ-desert.png"},
+  {"eval": "__shot(__B.snowy_plains.x, __B.snowy_plains.z, {time: 5000, yaw: 120, pitch: -12, up: 8, hideHud: true})"},
+  {"screenshot": "tools/out/integ-snowy.png"},
+  {"eval": "__shot(__B.snowy_taiga.x, __B.snowy_taiga.z, {time: 5000, yaw: 60, pitch: -10, up: 6, hideHud: true})"},
+  {"screenshot": "tools/out/integ-snowy-taiga.png"},
+  {"eval": "__shot(__B.birch_forest.x, __B.birch_forest.z, {time: 5500, yaw: 20, pitch: -5, up: 2, hideHud: true})"},
+  {"screenshot": "tools/out/integ-birch.png"},
+  {"eval": "__shot(__B.flower_forest.x, __B.flower_forest.z, {time: 5500, yaw: 100, pitch: -15, up: 3, hideHud: true})"},
+  {"screenshot": "tools/out/integ-flowers.png"},
+  {"eval": "(async()=>{const g=__game,d=g.debug,w=g.world; const o=__B.ocean; await d.tp(o.x, null, o.z); const p=g.player; let x=Math.floor(p.x), z=Math.floor(p.z); let best=null; for (let r=0;r<40 && !best;r+=2) for (let dx=-r;dx<=r && !best;dx+=2) for (let dz=-r;dz<=r;dz+=2) { if (d.blockName(o.x+dx,62,o.z+dz)==='water' && d.blockName(o.x+dx,54,o.z+dz)==='water') { best=[o.x+dx,o.z+dz]; break; } } if (!best) return 'no deep water'; p.setPosition(best[0]+0.5, 56, best[1]+0.5); p.flying=true; d.setTime(6000); d.lookDeg(30, -10); d.hideHud(false); await d.waitIdle(30000); await d.frames(20); return {best, eyeInWater: p.eyeInWater, y: p.y}})()"},
+  {"screenshot": "tools/out/integ-underwater.png"},
+  {"eval": "__shot(__B.snowy_peaks.x, __B.snowy_peaks.z, {time: 4000, yaw: 45, pitch: -20, up: 30, hideHud: true})"},
+  {"screenshot": "tools/out/integ-peaks.png"},
+  {"eval": "__shot(__B.mountains.x, __B.mountains.z, {time: 3000, yaw: 160, pitch: -15, up: 20, hideHud: true})"},
+  {"screenshot": "tools/out/integ-mountains.png"}
+]

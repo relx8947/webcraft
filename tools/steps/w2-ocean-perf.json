@@ -1,0 +1,13 @@
+[
+  {"eval": "__game.debug.waitIdle(60000)"},
+  {"eval": "(async()=>{const g=__game,d=g.debug; const o=d.findBiome('deep_ocean')||d.findBiome('ocean'); await d.tp(o.x, null, o.z); g.player.flying=true; g.player.setPosition(g.player.x, 66, g.player.z); d.lookDeg(0,-10); await d.waitIdle(60000); return o})()"},
+  {"move": [640, 360]},
+  {"eval": "__game.debug.perf(true)"},
+  {"key": "KeyW", "action": "down"},
+  {"key": "ControlLeft", "action": "down"},
+  {"sleep": 8000},
+  {"key": "ControlLeft", "action": "up"},
+  {"key": "KeyW", "action": "up"},
+  {"eval": "(()=>{const g=__game; const st=g.debug.stats(); return {perf:g.debug.perf(), drawCalls:st.renderer.drawCalls, visible:st.renderer.visibleSections, pos:[g.player.x|0,g.player.y|0,g.player.z|0]}})()"},
+  {"screenshot": "tools/out/w2int/ocean-fly.png"}
+]

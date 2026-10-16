@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebCraft mob test</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; left: 6px; top: 4px; color: #fff; font: 12px/1.35 monospace; text-shadow: 1px 1px 0 #000;
+         white-space: pre; pointer-events: none; }
+  .lbl { position: fixed; color: #fff; font: 13px "Microsoft YaHei", monospace; text-shadow: 1px 1px 0 #000;
+         pointer-events: none; transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">loading…</div>
+<script type="module">
+// Visual test of the mob models (src/render/mobmodels.js + entityrenderer.js) with its own WebGL2 context and the
+// real texture array. URL parameters:
+//   view=line (default: the 8 mobs side by side) | poses (hurt, death, creeper swell, skeleton aiming, sheep
+//        eating, attacking zombie, burning zombie / skeleton, flapping chicken, arrows) | closeup (mob=<type>,
+//        face=<deg> facing, spin=1) | hand (first-person use actions: use=eat|bow|none, p=0..1, item=<name>)
+//        | live (real EntityManager + mobs.js: spawns every mob type and lets them wander; n=<count>)
+//   time=noon|night|<0..1>   walk=1 (walk cycle)   t=<s> (animation time)   face=<deg>   hud=0   labels=0
+//   x, y, z, yaw, pitch      camera override (degrees)
+import { generateTextures, getLayerAlphaModes, buildMipChain } from '../src/render/textures.js';
+import { EntityRenderer } from '../src/render/entityrenderer.js';
+import { ParticleSystem } from '../src/game/particles.js';
+import { BLOCK, ITEM, itemId as itemIdByName } from '../src/world/registry.js';
+import { computeDaylight } from '../src/config.js';
+import { mat4Create, mat4Perspective, mat4ViewRotation, mat4Multiply } from '../src/util/math.js';
+import { MODEL_ID } from '../src/render/mobmodels.js';
+
+const P = new URLSearchParams(location.search);
+const num = (k, d) => (P.has(k) && P.get(k) !== '' && Number.isFinite(Number(P.get(k))) ? Number(P.get(k)) : d);
+const VIEW = P.get('view') ?? 'line';
+const T = num('t', 1.3);
+const DEG = Math.PI / 180;
+const hud = document.getElementById('hud');
+if (P.get('hud') === '0') hud.style.display = 'none';
+
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: true, stencil: true, powerPreference: 'high-performance' });
+const dpr = window.devicePixelRatio || 1;
+canvas.width = Math.round(innerWidth * dpr);
+canvas.height = Math.round(innerHeight * dpr);
+
+// ---------------------------------------------------------------- texture array (as the Renderer does)
+const tex = generateTextures();
+const mips = buildMipChain(tex.data, tex.size, tex.layers, getLayerAlphaModes());
+const textureArray = gl.createTexture();
+gl.activeTexture(gl.TEXTURE0);
+gl.bindTexture(gl.TEXTURE_2D_ARRAY, textureArray);
+gl.texStorage3D(gl.TEXTURE_2D_ARRAY, mips.length, gl.RGBA8, tex.size, tex.size, tex.layers);
+gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+mips.forEach((lv, k) => {
+  const s = tex.size >> k;
+  gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, k, 0, 0, 0, s, s, tex.layers, gl.RGBA, gl.UNSIGNED_BYTE, lv);
+});
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_LINEAR);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAX_LEVEL, mips.length - 1);
+const t1 = performance.now();
+const er = new EntityRenderer(gl, textureArray, { textureData: tex.data });
+const tER = performance.now() - t1;
+
+// ---------------------------------------------------------------- lighting
+const tp = P.get('time');
+const timeOfDay = tp === 'night' ? 0.75 : tp === 'noon' || tp === null ? 0.25 : Number(tp);
+const daylight = computeDaylight(timeOfDay);
+const night = 1 - Math.min(1, Math.max(0, (daylight - 0.2) / 0.8));
+const skyTint = [0.85 + 0.15 * (1 - night), 0.92 + 0.08 * (1 - night), 1.35 - 0.35 * (1 - night)];
+const fogColor = [0.75 * daylight + 0.02, 0.85 * daylight + 0.02, 1.0 * daylight + 0.04];
+const skyColor = [0.47 * daylight, 0.65 * daylight, 1.0 * daylight];
+const GROUND = 64;
+const light = (sky, blk = 0) => (sky << 4) | blk;
+
+// ---------------------------------------------------------------- model render items
+const FIELDS = {
+  kind: 'model', model: 'pig', modelId: 0, x: 0, y: GROUND, z: 0, bodyYaw: 0, headYaw: 0, headPitch: 0,
+  limbSwing: 0, limbSwingAmount: 0, attack: 0, sneaking: false, age: T, hurt: 0, death: 0, light: light(15),
+  itemId: 0, shadowY: GROUND, shadow: 0.5, shadowRadius: 0.5, swell: 0, onFire: 0, sheared: false,
+  aggressive: false, eat: 0, flap: 0, useTime: 0, color: -1, shake: 0,
+};
+const SHADOW = { pig: 0.7, cow: 0.7, sheep: 0.7, chicken: 0.3, zombie: 0.5, skeleton: 0.5, creeper: 0.5, spider: 0.8, player: 0.5 };
+function mob(model, x, z, extra = {}) {
+  const r = { ...FIELDS, model, modelId: MODEL_ID[model], x, z, shadowRadius: SHADOW[model] ?? 0.5, ...extra };
+  if (r.headYaw === 0 && extra.headYaw === undefined) r.headYaw = r.bodyYaw;
+  return r;
+}
+const facing = num('face', 180) * DEG;     // 180 = facing the camera (south)
+const walk = P.get('walk') === '1';
+const items = [];
+const labels = [];
+const MOBS = ['pig', 'cow', 'sheep', 'chicken', 'zombie', 'skeleton', 'creeper', 'spider'];
+const NAMES = { pig: '猪', cow: '牛', sheep: '羊', chicken: '鸡', zombie: '僵尸', skeleton: '骷髅', creeper: '苦力怕', spider: '蜘蛛' };
+const walkFields = (k) => (walk ? { limbSwing: T * 6 + k, limbSwingAmount: 1 } : {});
+
+if (VIEW === 'line') {
+  MOBS.forEach((m, k) => {
+    const x = (k - 3.5) * 1.75;
+    items.push(mob(m, x, -3, { bodyYaw: facing, headYaw: facing, ...walkFields(k),
+      itemId: m === 'skeleton' ? ITEM.BOW : 0 }));
+    labels.push([NAMES[m], x, GROUND + 2.4, -3]);
+  });
+} else if (VIEW === 'poses') {
+  const row1 = [
+    ['pig', { hurt: 1 }, '受伤'], ['cow', { death: 0.6 }, '死亡 0.6s'], ['spider', { death: 0.9 }, '蜘蛛死亡'],
+    ['creeper', { swell: 0.55 }, '膨胀 0.55'], ['creeper', { swell: 0.95 }, '膨胀 0.95'],
+    ['skeleton', { itemId: ITEM.BOW, aggressive: true, useTime: 0.6, headPitch: 0.15 }, '拉弓'],
+    ['sheep', { eat: 20 }, '吃草'], ['chicken', { flap: 0.9, limbSwing: 2, limbSwingAmount: 0.7 }, '扑腾'],
+  ];
+  row1.forEach(([m, extra, label], k) => {
+    const x = (k - 3.5) * 1.75;
+    items.push(mob(m, x, -3.5, { bodyYaw: facing, headYaw: facing, ...extra }));
+    labels.push([label, x, GROUND + 2.4, -3.5]);
+  });
+  const row2 = [
+    ['zombie', { aggressive: true, attack: 0.4 }, '僵尸攻击'], ['zombie', { onFire: 1, limbSwing: 3, limbSwingAmount: 0.8 }, '燃烧'],
+    ['skeleton', { onFire: 1, itemId: ITEM.BOW }, '燃烧骷髅'], ['zombie', { itemId: ITEM.IRON_SHOVEL }, '拿铲子'],
+    ['sheep', { sheared: true }, '剪毛'], ['spider', { headYaw: facing + 0.6, limbSwing: 2.2, limbSwingAmount: 1 }, '走路'],
+    ['pig', { onFire: 1 }, '燃烧猪'], ['cow', { headPitch: -0.5, headYaw: facing - 0.6 }, '抬头'],
+  ];
+  row2.forEach(([m, extra, label], k) => {
+    const x = (k - 3.5) * 1.75;
+    items.push(mob(m, x, -7.5, { bodyYaw: facing, headYaw: extra.headYaw ?? facing, ...extra }));
+    labels.push([label, x, GROUND + 2.4, -7.5]);
+  });
+  // arrows: flying (various pitches) and stuck in the ground (shaking)
+  for (let k = 0; k < 5; k++) {
+    items.push({ ...FIELDS, model: 'arrow', modelId: MODEL_ID.arrow, x: -3 + k * 1.5, y: GROUND + 1.2, z: -1.5,
+      bodyYaw: (k * 40) * DEG, headPitch: (k - 2) * 20 * DEG, shadow: 0, shake: k === 4 ? 5 : 0 });
+  }
+} else if (VIEW === 'sheep') {
+  // natural fleece colours (white, black, gray, light gray, brown, pink) + a sheared one
+  const tints = [-1, 0x191616, 0x3d3b35, 0x717676, 0x253f62, 0x7f68b6];
+  const names = ['白', '黑', '灰', '淡灰', '棕', '粉'];
+  tints.forEach((c, k) => {
+    const x = (k - 3) * 1.6;
+    items.push(mob('sheep', x, -3, { bodyYaw: facing, headYaw: facing, color: c }));
+    labels.push([names[k], x, GROUND + 1.8, -3]);
+  });
+  items.push(mob('sheep', 3 * 1.6, -3, { bodyYaw: facing, headYaw: facing, sheared: true }));
+  labels.push(['剪毛', 3 * 1.6, GROUND + 1.8, -3]);
+} else if (VIEW === 'arrows') {
+  // arrows flying in different directions (yaw = atan2(vx, vz), pitch up/down) + one stuck and shaking
+  const dirs = [[0, 0], [90, 0], [45, 30], [135, -30], [180, 0], [270, 60]];
+  dirs.forEach(([yawDeg, pitchDeg], k) => {
+    items.push({ ...FIELDS, model: 'arrow', modelId: MODEL_ID.arrow, x: -2.5 + k, y: GROUND + 0.9, z: -1,
+      bodyYaw: yawDeg * DEG, headPitch: pitchDeg * DEG, shadow: 0, shake: 0 });
+    labels.push([`${yawDeg}/${pitchDeg}`, -2.5 + k, GROUND + 1.4, -1]);
+  });
+  items.push({ ...FIELDS, model: 'arrow', modelId: MODEL_ID.arrow, x: 0, y: GROUND + 0.1, z: -2.5,
+    bodyYaw: 30 * DEG, headPitch: -50 * DEG, shadow: 0, shake: num('shake', 0) });
+} else if (VIEW === 'closeup') {
+  const m = P.get('mob') ?? 'pig';
+  const spin = P.get('spin') === '1';
+  const extra = {};
+  for (const k of ['attack', 'swell', 'eat', 'flap', 'useTime', 'hurt', 'death', 'onFire', 'headPitch']) if (P.has(k)) extra[k] = num(k, 0);
+  if (P.has('item')) extra.itemId = itemIdByName(P.get('item'));
+  if (P.get('aggressive') === '1') extra.aggressive = true;
+  if (P.get('sheared') === '1') extra.sheared = true;
+  items.push(mob(m, 0, -2.2, { bodyYaw: facing, headYaw: facing, ...walkFields(0), ...extra }));
+  if (spin) {
+    items.push(mob(m, -2, -3.5, { bodyYaw: facing + 90 * DEG, headYaw: facing + 90 * DEG, ...extra }));
+    items.push(mob(m, 2, -3.5, { bodyYaw: facing - 90 * DEG, headYaw: facing - 90 * DEG, ...extra }));
+    items.push(mob(m, 0, -5.5, { bodyYaw: facing + 180 * DEG, headYaw: facing + 180 * DEG, ...extra }));
+  }
+}
+
+// ground: grass blocks
+const ground = [];
+if (VIEW !== 'hand') {
+  for (let z = -16; z <= 4; z++) {
+    for (let x = -10; x <= 10; x++) {
+      ground.push({ kind: 'block', blockId: BLOCK.GRASS_BLOCK, x: x + 0.5, y: GROUND - 1, z: z + 0.5, scale: 1, light: light(15), flash: 0 });
+    }
+  }
+}
+
+// ---------------------------------------------------------------- live mode (real EntityManager + mobs)
+let manager = null, mobsModule = null, game = null;
+const extra = new Map();
+const key = (x, y, z) => (((x + 512) & 1023) * 1024 + ((z + 512) & 1023)) * 256 + (y & 255);
+const world = {
+  getBlock(x, y, z) {
+    const e = extra.get(key(x, y, z));
+    if (e !== undefined) return e;
+    if (x < -10 || x > 10 || z < -16 || z > 4) return y < GROUND - 1 ? BLOCK.STONE : y === GROUND - 1 ? BLOCK.DIRT : 0;
+    return y < GROUND - 1 ? BLOCK.STONE : y === GROUND - 1 ? BLOCK.GRASS_BLOCK : 0;
+  },
+  setBlock(x, y, z, id) { extra.set(key(x, y, z), id); return true; },
+  getLight() { return VIEW === 'live' && tp === 'night' ? light(15) : light(15); },
+  getTopY() { return GROUND - 1; },
+  isChunkGenerated() { return true; },
+  isChunkMeshed() { return true; },
+};
+const particles = new ParticleSystem({ world, player: null }, { seed: 3, ambient: false });
+if (VIEW === 'live') {
+  const { EntityManager } = await import('../src/game/entities.js');
+  mobsModule = await import('../src/game/mobs.js');
+  game = { world, particles, audio: null, settings: { difficulty: 'normal' }, time: tp === 'night' ? 18000 : 6000,
+    get daylight() { return daylight; }, get timeOfDay() { return timeOfDay; },
+    player: { x: 0.5, y: GROUND, z: 3.5, yaw: 0, pitch: 0, width: 0.6, height: 1.8, eyeHeight: 1.62, dead: false, mode: 'creative',
+      inventory: { add: () => 0 }, getAABB(o = {}) { o.minX = this.x - 0.3; o.maxX = this.x + 0.3; o.minY = this.y; o.maxY = this.y + 1.8; o.minZ = this.z - 0.3; o.maxZ = this.z + 0.3; return o; } } };
+  manager = new EntityManager(game);
+  game.entities = manager;
+  game.spawnItem = (...a) => manager.spawnItem(...a);
+  const n = num('n', 2);
+  MOBS.forEach((m, k) => {
+    for (let c = 0; c < n; c++) mobsModule.spawnMob(game, m, (k - 3.5) * 2 + 0.5, GROUND, -4 - c * 2.5, { persistent: true });
+  });
+}
+
+// ---------------------------------------------------------------- hand view
+const hand = {
+  itemId: P.has('item') ? itemIdByName(P.get('item')) : (P.get('use') === 'bow' ? ITEM.BOW : ITEM.COOKED_PORKCHOP),
+  swing: 0, equip: 1, bobX: 0, bobY: 0, bobRoll: 0, bobPitch: 0, swayYaw: 0, swayPitch: 0, light: light(15), count: 1,
+  useAction: P.get('use') === 'none' ? null : (P.get('use') ?? 'eat'), useProgress: num('p', 0.5),
+};
+
+// ---------------------------------------------------------------- camera + ctx
+const cams = {
+  line: { x: 0.5, y: GROUND + 2.1, z: 6.2, yaw: 0, pitch: -12 },
+  poses: { x: 0.5, y: GROUND + 4.2, z: 6.5, yaw: 0, pitch: -24 },
+  closeup: { x: 0, y: GROUND + 1.6, z: 1.6, yaw: 0, pitch: -14 },
+  arrows: { x: 0, y: GROUND + 1.5, z: 2.2, yaw: 0, pitch: -20 },
+  hand: { x: 0, y: GROUND + 1.6, z: 0, yaw: 0, pitch: 0 },
+  live: { x: 0.5, y: GROUND + 5, z: 9, yaw: 0, pitch: -28 },
+};
+const camDef = cams[VIEW] ?? cams.line;
+const cam = { x: num('x', camDef.x), y: num('y', camDef.y), z: num('z', camDef.z), yaw: num('yaw', camDef.yaw) * DEG, pitch: num('pitch', camDef.pitch) * DEG };
+const proj = mat4Create(), viewRot = mat4Create(), viewProj = mat4Create();
+const ctx = {
+  gl, proj, viewRot, viewProj, cameraPos: [0, 0, 0], camRight: [1, 0, 0], camUp: [0, 1, 0], fogColor,
+  fogStart: 0.6 * 8 * 16, fogEnd: 0.95 * 8 * 16, daylight, skyTint, time: T, aspect: 1, texture: textureArray,
+};
+function setupCtx(W, H) {
+  ctx.aspect = W / H;
+  mat4Perspective(proj, 70 * DEG, ctx.aspect, 0.05, 2048);
+  mat4ViewRotation(viewRot, cam.yaw, cam.pitch, 0);
+  mat4Multiply(viewProj, proj, viewRot);
+  ctx.cameraPos[0] = cam.x; ctx.cameraPos[1] = cam.y; ctx.cameraPos[2] = cam.z;
+  ctx.camRight[0] = viewRot[0]; ctx.camRight[1] = viewRot[4]; ctx.camRight[2] = viewRot[8];
+  ctx.camUp[0] = viewRot[1]; ctx.camUp[1] = viewRot[5]; ctx.camUp[2] = viewRot[9];
+}
+function baseState(W, H) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);
+  gl.depthMask(true);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.BACK);
+  gl.frontFace(gl.CCW);
+  gl.disable(gl.BLEND);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, textureArray);
+}
+
+// labels (projected once per frame)
+const labelEls = labels.map(([text]) => {
+  const el = document.createElement('div');
+  el.className = 'lbl';
+  el.textContent = text;
+  if (P.get('labels') === '0') el.style.display = 'none';
+  document.body.appendChild(el);
+  return el;
+});
+function placeLabels(W, H) {
+  labels.forEach(([, x, y, z], i) => {
+    const rx = x - cam.x, ry = y - cam.y, rz = z - cam.z;
+    const m = viewProj;
+    const cx = m[0] * rx + m[4] * ry + m[8] * rz + m[12];
+    const cy = m[1] * rx + m[5] * ry + m[9] * rz + m[13];
+    const cw = m[3] * rx + m[7] * ry + m[11] * rz + m[15];
+    const el = labelEls[i];
+    if (cw <= 0) { el.style.display = 'none'; return; }
+    el.style.left = `${((cx / cw) * 0.5 + 0.5) * innerWidth}px`;
+    el.style.top = `${(0.5 - (cy / cw) * 0.5) * innerHeight}px`;
+  });
+}
+
+const list = [];
+let frames = 0;
+let last = performance.now();
+let animT = T;
+function frame() {
+  const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (manager) {
+    manager.update(dt);
+    particles.update(dt);
+    animT += dt;
+    ctx.time = animT;
+  } else if (P.get('anim') === '1') {
+    animT += dt;
+    ctx.time = animT;
+    for (const it of items) {
+      it.age = animT;
+      if (walk) it.limbSwing = animT * 6;
+    }
+  }
+  setupCtx(W, H);
+  baseState(W, H);
+  gl.clearColor(skyColor[0], skyColor[1], skyColor[2], 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  list.length = 0;
+  for (const g of ground) list.push(g);
+  for (const it of items) list.push(it);
+  if (manager) manager.getRenderList(list);
+  const a = performance.now();
+  if (VIEW !== 'hand') er.renderEntities(ctx, list);
+  baseState(W, H);
+  er.renderParticles(ctx, particles.getRenderData());
+  if (VIEW === 'hand') {
+    baseState(W, H);
+    er.renderHand(ctx, hand);
+  }
+  const cpu = performance.now() - a;
+  placeLabels(W, H);
+  frames++;
+  if (frames % 10 === 1) {
+    hud.textContent = `mob test  view=${VIEW}  time=${timeOfDay}  EntityRenderer init ${tER.toFixed(1)} ms\n` +
+      `items ${list.length}  instances ${er.stats.instances}  draws ${er.stats.drawCalls}  cpu ${cpu.toFixed(3)} ms` +
+      (manager ? `\nlive entities ${manager.count}` : '');
+  }
+  if (frames === 4) window.__ready = true;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+window.__er = er;
+window.__particles = particles;
+window.__manager = () => manager;
+window.__game = () => game;
+// allocation probe (node tools/entities-alloc.mjs --url "tools/mob-test.html?view=live&n=3&hud=0"): n frames of
+// EntityManager.update (mob AI, physics, path finding) + getRenderList + renderEntities / renderParticles
+window.__allocLoop = (n) => {
+  const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+  setupCtx(W, H);
+  for (let i = 0; i < n; i++) {
+    if (manager) manager.update(1 / 60);
+    particles.update(1 / 60);
+    const own = manager ? manager.getRenderList() : items;
+    baseState(W, H);
+    er.renderEntities(ctx, own);
+    baseState(W, H);
+    er.renderParticles(ctx, particles.getRenderData());
+  }
+  return n;
+};
+</script>
+</body>
+</html>

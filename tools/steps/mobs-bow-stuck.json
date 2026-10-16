@@ -1,0 +1,21 @@
+[
+  {"eval": "(async () => { const g = window.__game; const w = await import('/tools/mob-wire.js'); window.__w = w; const r = await w.wire(g); r.spawner.hostileCap = 0; g.setTime(6000); g.player.inventory.clear(); g.debug.give('bow', 1); g.debug.give('arrow', 8); g.debug.select(0); g.debug.lookDeg(0, -25); g.debug.hideHud(true); return g.player.getSelectedStack()?.id; })()"},
+  {"sleep": 400},
+  {"mouseDown": [640, 360], "button": "right"},
+  {"sleep": 1200},
+  {"mouseUp": [640, 360], "button": "right"},
+  {"sleep": 60},
+  {"screenshot": "tools/out/mobs/player-arrow-flight.png"},
+  {"sleep": 1500},
+  {"eval": "(() => { const g = window.__game; g.debug.lookDeg(20, -30); return 1; })()"},
+  {"mouseDown": [640, 360], "button": "right"},
+  {"sleep": 900},
+  {"mouseUp": [640, 360], "button": "right"},
+  {"sleep": 2000},
+  {"eval": "(() => { const g = window.__game; const a = g.entities.list.filter(e => e.type === 'arrow'); const x = a[0]; if (x) { g.debug.tp(x.x + 1.2, x.y + 0.4, x.z + 1.2); g.debug.lookAt(x.x, x.y + 0.1, x.z); } return a.map(x => x.x.toFixed(1) + ',' + x.y.toFixed(1) + ',' + x.z.toFixed(1) + (x.inGround ? ' G' : '') + ' pickup ' + x.pickup).join(' | ') + ' inv ' + g.player.inventory.count(307); })()"},
+  {"sleep": 500},
+  {"screenshot": "tools/out/mobs/player-arrow-stuck.png"},
+  {"eval": "(() => { const g = window.__game; const a = g.entities.list.filter(e => e.type === 'arrow')[0]; if (a) g.debug.tp(a.x, a.y, a.z); return 1; })()"},
+  {"sleep": 800},
+  {"eval": "(() => { const g = window.__game; return 'arrows ' + g.entities.countEntities('arrow') + ' inv ' + g.player.inventory.count(307); })()"}
+]

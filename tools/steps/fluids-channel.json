@@ -1,0 +1,108 @@
+[
+ {
+  "log": "dig a channel from a river (seed 42, near spawn) with real mining; obsidian making with real bucket clicks"
+ },
+ {
+  "eval": "import('/tools/fluids-helpers.js').then((m) => m.install())"
+ },
+ {
+  "eval": "__game.debug.setTime(5000); __game.debug.hideHud(true); __fx.view(30.5, 76, 44.5, 31, 62, 34)"
+ },
+ {
+  "eval": "__game.debug.waitIdle(15000)"
+ },
+ {
+  "eval": "(() => { let n = 0; for (let x = 27; x <= 33; x++) for (let y = 67; y >= 62; y--) if (__game.world.getBlock(x, y, 34) !== 0 && __game.debug.mine(x, y, 34)) n++; for (let y = 67; y >= 63; y--) if (__game.world.getBlock(34, y, 34) !== 0) __game.debug.mine(34, y, 34); return n; })()"
+ },
+ {
+  "eval": "__game.debug.frames(10)"
+ },
+ {
+  "screenshot": "tools/out/w2/channel-dry.png"
+ },
+ {
+  "eval": "JSON.stringify({ wall: __game.debug.blockName(34, 62, 34), trench: __fx.row(27, 36, 62, 34), sides: [__fx.row(27, 35, 62, 33), __fx.row(27, 35, 62, 35)] })"
+ },
+ {
+  "log": "open the channel with a real left click on the last block"
+ },
+ {
+  "eval": "__fx.hold('stone'); __fx.view(31.5, 63, 34.5, 34.5, 62.5, 34.5)"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "eval": "JSON.stringify(__game.debug.target())"
+ },
+ {
+  "click": [
+   640,
+   360
+  ],
+  "button": "left"
+ },
+ {
+  "sleep": 200
+ },
+ {
+  "eval": "JSON.stringify({ wall: __game.debug.blockName(34, 62, 34) })"
+ },
+ {
+  "eval": "__fx.view(29.5, 72, 41.5, 32, 62, 34)"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "screenshot": "tools/out/w2/channel-filling.png"
+ },
+ {
+  "eval": "__fx.settle(30000).then((r) => JSON.stringify(r))"
+ },
+ {
+  "eval": "JSON.stringify({ trench: __fx.row(27, 36, 62, 34) })"
+ },
+ {
+  "screenshot": "tools/out/w2/channel-full.png"
+ },
+ {
+  "log": "deepen the far end: a drop -> the channel water falls into the hole"
+ },
+ {
+  "eval": "(() => { for (let y = 61; y >= 57; y--) __game.debug.mine(30, y, 34); return __fx.row(30, 30, 57, 34); })()"
+ },
+ {
+  "eval": "__fx.settle(30000).then((r) => JSON.stringify(r))"
+ },
+ {
+  "eval": "JSON.stringify({ trench: __fx.row(27, 36, 62, 34), hole: [57, 58, 59, 60, 61].map((y) => __game.debug.blockName(30, y, 34)) })"
+ },
+ {
+  "eval": "__fx.view(27.5, 71, 40.5, 30.5, 60, 34.5)"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "screenshot": "tools/out/w2/channel-drop.png"
+ },
+ {
+  "eval": "__fx.view(31.5, 82, 34.6, 31.5, 62, 34.5)"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "screenshot": "tools/out/w2/channel-top.png"
+ },
+ {
+  "eval": "__fx.view(30.5, 70, 26.5, 31, 62, 34)"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "screenshot": "tools/out/w2/channel-north.png"
+ }
+]

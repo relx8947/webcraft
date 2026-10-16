@@ -1,0 +1,16 @@
+[
+  {"waitFor": "window.__ready", "timeout": 90000},
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"key": "Escape"},
+  {"sleep": 400},
+  {"eval": "(()=>{const b=[...document.querySelectorAll('#ui-root .mc-button')].map(e=>{const r=e.getBoundingClientRect(); return e.textContent.trim()+'@'+Math.round(r.x+r.width/2)+','+Math.round(r.y+r.height/2)}); return b})()"},
+  {"screenshot": "tools/out/w2int/pause.png"},
+  {"click": [639, 306]},
+  {"sleep": 500},
+  {"eval": "(()=>{const b=[...document.querySelectorAll('#ui-root .mc-button, #ui-root .mc-slider')].map(e=>{const r=e.getBoundingClientRect(); return e.textContent.trim()+'@'+Math.round(r.x+r.width/2)+','+Math.round(r.y+r.height/2)}); return b})()"},
+  {"screenshot": "tools/out/w2int/options.png"},
+  {"click": [940, 546]},
+  {"sleep": 300},
+  {"eval": "__game.settings.brightness"},
+  {"screenshot": "tools/out/w2int/options-bright.png"}
+]

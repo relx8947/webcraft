@@ -1,0 +1,864 @@
+[
+ {
+  "dimension": "code",
+  "id": "CODE-1",
+  "title": "Save & quit silently throws away the world when an IndexedDB write fails (no error shown, unsaved chunk edits lost)",
+  "severity": "major",
+  "files": [
+   "src/game.js:749-784 (quitToTitle: errors at 763-777 are only console.warn'ed, then _detachWorld() + destroy)",
+   "src/ui/ui.js:415-423 (saveAndQuit always shows the title screen)",
+   "src/game.js:366 (autosave failures only go to console.error)",
+   "src/world/storage.js:431-471 (memory fallback when IndexedDB is unavailable: one console.warn only; nothing in src/ui reads storage.persistent)"
+  ],
+  "evidence": "Step file tools/out/qa/savefail.json (in the snapshot), URL index.html?autostart=1&seed=42&save=1. I placed 5 stone blocks, then replaced storage._b.putChunks with a function that rejects with DOMException QuotaExceededError, then called the real UI path g.ui.openPause(); await g.ui.saveAndQuit().\nResult: {state:'title', screen:'title'}. The console only shows '[game] saving the world failed: QuotaExceededError' and '[game] unloading the world failed: ...'.\nScreenshot tools/out/qa/savefail-title.png shows the normal title screen with no warning.\nAfter restoring putChunks and reopening the world, the 5 cells read [0,0,0,0,0]: the edits are gone.\nThe meta transaction (saveWorldMeta) had committed before the chunk write failed, so inventory and position from that session persist while its block edits do not.",
+  "expected": "When saving fails, the player is told and the world stays loaded, with options to retry or quit without saving. In Minecraft a failed save is reported, not silently discarded. A browser with no usable IndexedDB should show a visible 'worlds will not be saved' warning.",
+  "actual": "quitToTitle() swallows both rejections, detaches and destroys the World (dropping the only copy of the modified chunks) and returns to the title as if everything was saved. Autosave failures and the memory-only storage fallback are likewise reported only in the console.",
+  "suggestedFix": "In quitToTitle(), if saveWorld() or world.destroy() rejects, keep the World attached (do not call _detachWorld) and show an error screen ('无法保存世界：<reason>' with [重试] / [不保存并退出]); only detach after success or explicit confirmation. Have World.destroy() support a 'discard' mode for the second option. Surface autosave failures with game.addChatMessage('§c自动保存失败…'). When storage.persistent === false, show a persistent warning on the title and world-list screens. Make the save atomic (see CODE-2) so a failed chunk write cannot leave a newer meta behind.",
+  "repro": "node tools/harness.mjs --url \"index.html?autostart=1&seed=42&mode=survival&nomusic=1&save=1\" --wait-for \"window.__ready\" --sleep 1500 --allow-errors --steps tools/out/qa/savefail.json",
+  "verdict": "confirmed",
+  "verifyReasoning": "Re-ran the QA repro (tools/out/qa/savefail.json). saveAndQuit returned {state:'title', screen:'title'}, the title screen showed no warning (tools/out/qa/savefail-title.png), and after reopening the world the 5 edited cells read [0,0,0,0,0]. The only signals were two console.warn lines.\n\nMy own variant (E:/playground/minecraft/tools/out/snap-w1/tools/out/vcode/savefail2.json) also gave 9 diamonds just before quitting. After reopening, the inventory still had the 9 diamonds but the blocks were gone. So meta was written first (game.js:743) and chunks failed (744), leaving an inconsistent save.\n\nThe code confirms the rest:\n- quitToTitle (game.js:762-777) swallows both rejections, then calls _detachWorld() and destroys the only in-memory copy. World.destroy() documents that on failure 'the data stays in memory (call save() again to retry)', and the integrator ignores that contract.\n- ui.saveAndQuit always shows the title.\n- Autosave failures only go through _logOnce (console.error).\n- Nothing in src/ui reads storage.persistent or storage.backend (grep), so the memory fallback is invisible to the player.\n\nCaveat: an IndexedDB write failure is uncommon (quota, I/O, connection closed). Blocked site storage (indexedDB.open fails, so the memory fallback is used) is the more realistic trigger. The failure is silent and permanent, so 'major' is defensible, though one could argue minor.",
+  "refinedFix": "The proposed fix is incomplete: World.destroy() sets _closing=true and removes every chunk mesh from the renderer BEFORE it saves. A World whose destroy() rejected is frozen (update() returns early) and invisible, so 'keep the World attached after destroy() rejects' would not work.\n\nDo instead:\n(1) In quitToTitle, `await this.saveWorld()` first, using the atomic snapshot from CODE-2. On rejection, do NOT detach or destroy: keep state 'playing' (paused), reset _quitting, and rethrow.\n(2) ui.saveAndQuit catches that and shows a MessageScreen '无法保存世界：<err.message>' with [重试] (calls saveAndQuit again) and [不保存并退出] (calls game.quitToTitle({discard:true})). It must not call showTitle unconditionally.\n(3) Only after a successful save (or with discard) call world.destroy({save: !discard}). Its internal save then finds nothing modified. Make destroy() do the mesh removal and _closing only after the save resolves, or support save:false.\n(4) Autosave/hide-save failures: game.addChatMessage('§c自动保存失败：' + err.message) and retry after ~5 s instead of 30 s.\n(5) When game.storage.persistent === false, show a persistent red notice on the title, world-list and create-world screens ('无法访问浏览器存储，世界不会被保存').\n(6) Write meta and chunks in one transaction (CODE-2) so a failed chunk write cannot leave a newer meta behind.",
+  "owners": [
+   "fixer",
+   "world",
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "FIXER + WORLD (game/world side) and CONTAINERS (SaveFailedScreen: 重试 / 返回游戏 / 不保存并退出).",
+  "integratorNote": "INTEGRATOR wave 2: game side (FIXER: world kept open, saveFailed rejection) + UI side (CONTAINERS: SaveFailedScreen with 重试 / 返回游戏 / 不保存并退出) + world side (destroy({save:false}), failed final save keeps the world usable). containers-savefail.json passes on the integrated build (the only console.error is the simulated QuotaExceededError)."
+ },
+ {
+  "dimension": "code",
+  "id": "CODE-2",
+  "title": "Closing or reloading the tab keeps the inventory but loses all block edits since the last autosave (non-atomic unload save, no beforeunload guard)",
+  "severity": "major",
+  "files": [
+   "src/game.js:732-746 (_saveNow: saveWorldMeta in its own transaction first; chunk transactions only after several awaits in world.save())",
+   "src/game.js:998-1005 (visibilitychange/pagehide fire-and-forget saveWorld())",
+   "src/game/input.js:32 (sprint = ControlLeft)",
+   "src/ (no 'beforeunload' anywhere; navigator.keyboard.lock is only used in fullscreen, src/ui/menus.js:134-140)"
+  ],
+  "evidence": "Step file tools/out/qa/unload.json, URL index.html?autostart=1&save=1.\n2 s after entering the world (after the initial save) I set 4 blocks in 4 different chunks ((40|56|72|88,100,40)), added 7 diamonds, then navigated away (location.href = location.pathname).\nOn the next page I read IndexedDB directly: meta.player.inventory = [[261,7,0]], so the meta written by the pagehide/visibilitychange save committed. storage.loadChunk() returned null ('no-chunk') for all 4 chunks, so the chunk transactions never committed.\nThe page is torn down after the first transaction; _saveNow issues the chunk writes only after awaiting the meta transaction.",
+  "expected": "A page close, refresh or navigation either persists everything since the last save or nothing, so the state stays consistent; leaving with unsaved changes asks for confirmation. Minecraft saves the world when the window closes.",
+  "actual": "The inventory, position and time are saved but recent block edits are not. Mined ores reappear while their drops stay in the inventory (item duplication), and placed blocks vanish after their items were consumed (item loss). Exposure is up to 30 s of unpaused play: the autosave timer only runs while unpaused and opening the pause menu (Esc or Alt-Tab lock loss) does not save. Ctrl, the default sprint key, plus W is a browser-reserved close-tab shortcut that preventDefault cannot block outside fullscreen keyboard lock, so sprinting can close the tab, and there is no beforeunload prompt.",
+  "suggestedFix": "(1) Add Storage.saveSnapshot(meta, chunks) that writes the meta and all modified chunk records in ONE readwrite transaction over ['worlds','chunks'] (IndexedDB transactions are atomic), and use it for autosave, quit and unload. (2) In pagehide / visibilitychange 'hidden', encode synchronously and create the transaction synchronously inside the handler using the already-open IDBDatabase (no await of _storageReady or _getDB() first), then call tx.commit(). (3) Save when the pause menu opens. (4) While a non-temporary world has unsaved changes (world.stats().modified > 0 or a dirty meta), register a beforeunload handler that calls preventDefault() so Ctrl+W, Ctrl+R and tab close prompt.",
+  "repro": "node tools/harness.mjs --url \"index.html?autostart=1&seed=42&mode=survival&nomusic=1&save=1\" --wait-for \"window.__ready\" --allow-errors --steps tools/out/qa/unload.json  -> metaInv [[261,7,0]], blocks ['no-chunk' x4]",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced, and the outcome is racy. I tested with a variant harness that can really close and reload tabs in the same profile (E:/playground/minecraft/tools/out/snap-w1/tools/out/vcode/harness-v.mjs).\n\n- QA navigation repro (tools/out/qa/unload.json): 5/5 runs gave metaInv [[261,7,0]] with all 4 chunks 'no-chunk'.\n- Real tab close (Target.closeTarget, tools/out/vcode/close.json and close2.json), 11 runs total: 2 had the same inconsistent state (inventory saved, zero chunk records), 1 saved nothing, 8 saved everything.\n- Page.reload / F5 (tools/out/vcode/reload.json, reload2.json): 2/2 saved nothing, not even the meta, although putWorld had started inside pagehide.\n- Control: an explicit await saveWorld() wrote all 4 blocks, so the chunk save itself works.\n\nRoot cause, as the finding says: _saveNow awaits the meta transaction's completion (a new task) before world.save() creates any chunk transaction. Batches of 16 are also awaited one after another. And the pagehide save is queued on _saveChain behind the visibilitychange save, so it never runs.\n\nOther sub-claims checked in code:\n- The autosave timer only advances while unpaused (game.js:363).\n- PauseScreen / setScreen never save (ui.js:262-266, menus.js:570-577).\n- There is no beforeunload handler anywhere in src/.\n- sprint = ControlLeft/ControlRight (input.js:32), and keyboard.lock is only used in fullscreen (menus.js:134-140). I could not test Ctrl+W headless, but Chrome/Edge reserve it for closing the tab.\n\nClosing the tab is the most common way to stop a browser game, so 'major' is right.",
+  "refinedFix": "Fix (2) as written slightly misattributes the cause. Microtask awaits inside the handler are harmless; what loses the data is waiting for a transaction to complete (a new task) before creating the next one, plus the pagehide save being chained behind an in-flight save.\n\nDo:\n(1) Add World.collectSaveRecords(): synchronously encode every READY+modified chunk plus _unloadSaves, recording editCounts. Add Storage.saveSnapshot(worldId, meta, records): ONE db.transaction(['worlds','chunks'],'readwrite'), put meta + all chunk records, then tx.commit(). Clear the modified flags (editCount compare) and the _unloadSaves entries only on complete. Use it for autosave, quit and unload.\n(2) In visibilitychange 'hidden' and pagehide, call a synchronous _saveSnapshotNow() that bypasses _saveChain and creates the transaction in the same task with the cached open IDBDatabase (do not wait for a pending save).\n(3) Save when the pause menu opens, as Minecraft's integrated server does ('Saving and pausing game...').\n(4) While a persisted world has changes since the last successful snapshot, register beforeunload → e.preventDefault(); e.returnValue=''. This makes Ctrl+W (pressed while sprinting with Ctrl), Ctrl+R and tab close prompt first.\n(5) Optionally write the meta together with the background unload-chunk saves too, so a crash cannot persist mined blocks without the matching inventory.",
+  "owners": [
+   "fixer",
+   "survival",
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "FIXER + WORLD: every save uses World.saveSnapshot (one IndexedDB transaction, created synchronously in visibilitychange/pagehide); pause menu saves; 169/169 chunks persisted on real tab close."
+ },
+ {
+  "dimension": "code",
+  "id": "CODE-3",
+  "title": "No per-world session lock: a second tab on the same world silently overwrites progress with its stale state",
+  "severity": "major",
+  "files": [
+   "src/game.js:474-542 (startWorld acquires no lock)",
+   "src/game.js:732-746 (_saveNow writes the in-memory meta unconditionally)",
+   "src/game.js:998-1005 (a backgrounded or closed tab saves on visibilitychange/pagehide)"
+  ],
+  "evidence": "Step file tools/out/qa/twotabs.json. A same-origin iframe stands in for a second tab and opened the same world from the list: {sameWorld:true}, no warning.\nTab 1 gained 30 diamonds, moved to (100.5, 120, 100.5) and saved; the stored meta became inventory [[261,30,0]], position (100.5, 100.5).\nTab 2 then ran saveWorld(), which its pagehide/visibilitychange handler does when that tab is closed or hidden; CODE-2 shows the meta write commits even on page close. The stored meta became inventory [] and position (7.5, 7.5).\nRealistic trigger: a forgotten background tab holding the world gets closed after the player has made progress in a newer tab.",
+  "expected": "As with Minecraft's session.lock, a world that is open in another tab cannot be opened again ('该世界已在另一个标签页中打开'), or at least a stale instance cannot overwrite a newer save.",
+  "actual": "Both instances run the same world and the last one to save wins, rolling back inventory and position and potentially chunk data without any notice.",
+  "suggestedFix": "In startWorld, take an exclusive Web Lock for the world: navigator.locks.request('webcraft-world-' + meta.id, { ifAvailable: true }, (lock) => lock ? holdUntilQuit : null). Refuse to open the world when the lock is unavailable and release it in quitToTitle. As a second safeguard, store a monotonically increasing meta.saveSeq and refuse to write if the stored saveSeq is newer than the one this instance loaded (optimistic concurrency).",
+  "repro": "node tools/harness.mjs --url \"index.html?autostart=1&seed=42&mode=survival&nomusic=1&save=1\" --wait-for \"window.__ready\" --sleep 500 --allow-errors --steps tools/out/qa/twotabs.json",
+  "verdict": "confirmed",
+  "verifyReasoning": "The QA iframe repro gave {sameWorld:true}, stored inventory [[261,30,0]] at (100.5,100.5), and then [] at (7.5,7.5) after the second instance saved.\n\nI also checked the realistic case with real tabs (E:/playground/minecraft/tools/out/snap-w1/tools/out/vcode/twotabs3.json, multi-tab steps in harness-v.mjs):\n1. Tab A plays the world.\n2. Tab B opens the same world from the list with no warning, gains 30 diamonds, moves, and does 保存并退出 (stored meta: 30 diamonds at 100.5,100.5).\n3. I close the forgotten tab A without calling saveWorld manually.\n\nIn 3/3 runs, A's pagehide/visibilitychange save rolled the stored world back to an empty inventory at (7.5,7.5).\n\nNote: removing an iframe is NOT a valid proxy for a tab close (no overwrite happened in that variant), but real tab close reproduces reliably.\n\nThere is no navigator.locks, BroadcastChannel or saveSeq anywhere in src/. _saveNow only checks state === 'playing', which a backgrounded tab still has.\n\nThe trigger needs the same world open in two tabs, which is plausible since the world list puts the last-played world first. Severity sits between minor and major; the data loss is silent.",
+  "refinedFix": "The proposed Web Locks fix is right. Hold the lock for the whole session: in startWorld, `const ok = await new Promise(res => navigator.locks.request('webcraft-world-' + meta.id, { ifAvailable: true }, lock => { if (!lock) { res(false); return; } res(true); return new Promise(r => { this._releaseWorldLock = r; }); }));` and throw new Error('该世界已在另一个标签页中打开') when !ok. Call this._releaseWorldLock() at the end of quitToTitle, after the final save. The lock is released automatically if the tab dies.\n\nFor the optimistic-concurrency safeguard, read and compare the stored meta.saveSeq INSIDE the same readwrite transaction as the write (the CODE-2 snapshot transaction), and abort if the stored value is newer. A separate read-then-write would itself race.\n\nOptionally, the world list can mark worlds whose lock is held (navigator.locks.query()) as '已在其他标签页中打开'.",
+  "owners": [
+   "fixer"
+  ],
+  "status": "fixed",
+  "leadNote": "FIXER: per-world WorldLocks (Web Locks + BroadcastChannel fallback); a second tab can neither open nor delete the world."
+ },
+ {
+  "dimension": "player",
+  "id": "PLAYER-1",
+  "title": "Torches can't be attached to walls; clicking a wall's side either does nothing or places a floor torch in front of it",
+  "severity": "major",
+  "files": [
+   "src/world/blocks.js:171-175 (torch: needsSupport 'solid', single standing variant)",
+   "src/world/registry.js:159-165 (hasSupport only looks at the block below), 289-309 (getPlacementBlock has no wall variant)",
+   "src/game/interaction.js:368-382 (_placementCell), 397 (support check uses world.getBlock(x, y - 1, z))",
+   "src/world/blockupdates.js:117-129 (support re-check only against the block below)"
+  ],
+  "evidence": "Real right-clicks on a flat world (steps file tools/out/qa/place2.json, run with index.html?autostart=1&seed=1&type=flat&mode=survival). 'TORCH on side of wall': target {x:24,y:7,z:-2,face:4,stone}, cell (24,7,-1) stays 'air' and the torch count is unchanged. 'TORCH on side of wall at floor level': target {x:24,y:4,z:-2,face:4}, a free-standing torch appears at (24,4,-1) and isn't attached to the wall. tools/out/qa/walltorch.json repeats this on a cobblestone wall at night: clicking the face at y=6 gives cell 'air' with all 10 torches kept; clicking at y=4 places a 'torch' and leaves 9. Screenshot tools/out/qa/walltorch.png shows the torch standing on the grass in front of the wall.",
+  "expected": "Minecraft: right-clicking the side face (N/S/E/W) of a block with a sturdy face places a wall torch attached to that face, angled away from the wall. This works at any height and doesn't depend on the floor. The torch pops off when the block it's attached to is removed. Wall torches are the normal way to light caves and tunnels.",
+  "actual": "The clicked face is ignored for torches. Placement succeeds only when the cell below the target cell is a solid cube, and then it produces a free-standing floor torch. Otherwise it silently fails. Torches can't be put on cave walls, pillar sides or ceilings-adjacent walls.",
+  "suggestedFix": "Add hidden wall_torch_{north,south,east,west} variants (item 'torch', lightEmission 14, same selection-box style) with a new placement type 'wall' in getPlacementBlock. face 2 gives the standing torch; faces 0/1/4/5 give the wall variant facing the face normal; face 3 is rejected. Make the support check for wall variants test the block behind (x - nx, z - nz) for a solid cube instead of the block below, in both Interaction.placeBlock and BlockUpdater._check. BlockUpdater must also enqueue the 4 horizontal neighbours on a change so wall torches pop when their wall is broken. Add the leaning torch geometry to the mesher (Minecraft: about 22.5° tilt, base offset 5/16 toward the wall).",
+  "repro": "1) index.html?autostart=1&seed=1&type=flat&mode=survival. 2) __game.debug.give('torch',10); build a stone column at (24,4..8,-2); stand at (24.5,4,0.5). 3) Aim at the wall's south face at y≈7.5 and right-click: nothing happens. 4) Aim at the face at y≈4.5 and right-click: a standing torch appears on the floor in front of the wall.",
+  "verdict": "confirmed",
+  "verifyReasoning": "I reproduced this with real right-clicks in the snapshot: E:/playground/minecraft/tools/out/snap-w1/tools/out/vp/wt1.json on index.html?autostart=1&seed=1&type=flat&mode=survival, with a cobblestone wall at z=-3, y=4..7 and 10 torches.\n(A) Target {x:0,y:6,z:-3,face:4}: cell (0,6,-2) stays 'air', the inventory still holds 46x10, and there is no feedback at all (wt1_a.png).\n(B) Target {x:1,y:4,z:-3,face:4}: a standing 'torch' appears at (1,4,-2) and the inventory drops to 46x9. wt1_b.png shows it as an upright post on the grass in front of the wall, not attached to it.\n(C) Removing the wall block behind it leaves the torch in place, as expected for a floor torch.\n(D) Clicking the underside of a block at y=7 (face 3) also does nothing.\n\nThe code explains it. getPlacementBlock (registry.js:289-309) has no wall variant and returns the plain torch for every face. interaction.js:397 checks support only at (x, y-1, z). hasSupport('solid') (registry.js:163) needs a solid cube below. BlockUpdater._check (blockupdates.js:117-129) and blockChanged (62-66) look only at the cell below / the cell above. All cited lines match.\n\nNo doc lists this as a deliberate deviation. SPEC §7 defines only the standing torch geometry, and SPEC asks for Minecraft-faithful choices where it is silent. Wall-mounting torches is one of the most common Minecraft actions, and here it fails silently. Major severity is defensible. No capability is lost, though: floor torches still light caves.\n\nThe suggested fix is right in principle. Two details are off: 'face 3 is rejected' doesn't match Minecraft, and the leaning geometry and selection box are imprecise (see refinedFix).",
+  "refinedFix": "1) Registry: append 4 hidden variants `wall_torch_north/south/east/west` (variant() of torch, so item 'torch' and lightEmission 14). Ids 95-128 are already reserved by SPEC-wave2 §1, so append after them (e.g. 129-132). Give them a new placement type and a 'wall' support kind that records the attachment direction.\n2) Placement should follow Minecraft's StandingAndWallBlockItem. Build a direction list: the opposite of the clicked face first, then the player's nearest looking directions; skip UP. DOWN gives the standing torch if the block below is a solid full cube. A horizontal direction d gives the wall torch facing -d if the block at cell+d is a solid full cube. Take the first candidate that can survive, otherwise fail. In practice: side faces 0/1/4/5 attach to the clicked block, face 2 gives a standing torch, and face 3 falls back to an adjacent wall or the floor (don't simply reject it).\n3) Replace hasSupport(id, below) with canSurvive(world, x, y, z, id). Use it in Interaction.placeBlock and in BlockUpdater._check. BlockUpdater.blockChanged must also enqueue the 4 horizontal neighbours, so a wall torch pops (dropping 'torch') when its wall is broken.\n4) Mesher: use Minecraft's template_torch_wall. The post spans [-1,3.5,7]..[1,13.5,9]/16, rotated -22.5° about the wall-parallel axis with the pivot at the wall face (0, 3.5/16, 8/16). The foot touches the wall 3.5 px up and the top leans about 3.8 px outward. Rotate per facing.\n5) Selection box: 5 px deep from the wall, e.g. facing north = [5.5,3,11, 10.5,13,16]/16.\n6) Flame particles: block centre + 0.27 toward the wall, y + 0.92 (WallTorchBlock.animateTick). Update particles.js:527, which only knows BLOCK.TORCH.",
+  "owners": [
+   "survival",
+   "world",
+   "lead"
+  ],
+  "status": "fixed",
+  "leadNote": "Wave 2: lead (wall-torch variants 129-132, canStay, getPlacementBlock), SURVIVAL (placement with Minecraft fallbacks), WORLD (support popping + wall-torch mesh model)."
+ },
+ {
+  "dimension": "player",
+  "id": "PLAYER-4",
+  "title": "Default sprint key Ctrl + W closes the browser tab in windowed mode with no confirmation, losing up to 30 s of unsaved progress",
+  "severity": "major",
+  "files": [
+   "src/game/input.js:30-33 (sprint bound to ControlLeft/ControlRight), 278-286 (_shouldBlockKey: preventDefault can't cancel the reserved Ctrl+W)",
+   "src/game.js:38 (AUTOSAVE_SECONDS = 30), 990-1006 (only an async saveWorld() on visibilitychange/pagehide)",
+   "src/ui/menus.js:128-143 (Keyboard Lock only in fullscreen), 533 (loading tip)"
+  ],
+  "evidence": "Sprint is bound to ControlLeft/Right, matching Minecraft's default. Chrome/Edge reserve Ctrl+W (also Ctrl+T/Ctrl+N), so keydown.preventDefault() can't stop the tab closing outside fullscreen with navigator.keyboard.lock. docs/notes/player.md lists this as a known limitation. grep -r beforeunload src/ finds nothing, so nothing intercepts the close. Saves happen only every 30 s plus a fire-and-forget async IndexedDB write in pagehide that the browser may cut off. The only mitigations are the fullscreen button and a loading-screen tip. This can't be reproduced in headless CDP because browser accelerators aren't triggered there; the evidence is the code plus documented browser behaviour.",
+  "expected": "Holding Ctrl and then pressing W is a standard way to sprint in Minecraft. The web game shouldn't vanish when the player does it. At minimum, while a world is open, the browser should ask 'Leave site?' before closing.",
+  "actual": "In a normal (non-fullscreen) window, the first time a player holds Ctrl and presses W, or stops and re-presses W while Ctrl is held, the tab closes immediately. Ctrl+T (sprint + chat) opens a new tab the same way. Blocks placed or mined since the last autosave may be lost.",
+  "suggestedFix": "While state === 'playing', register a beforeunload handler: window.addEventListener('beforeunload', (e) => { if (game.world && game.state === 'playing') { game.saveWorld(); e.preventDefault(); e.returnValue = ''; } }) and remove it on quitToTitle. Chrome then shows a confirmation for Ctrl+W instead of closing. Optionally also offer a toggle-sprint or rebindable sprint key in Options, and show the Ctrl+W tip once in-game (chat or action bar) the first time sprint is triggered with Ctrl in windowed mode.",
+  "verdict": "confirmed",
+  "verifyReasoning": "The code confirms the main claim:\n- sprint is bound to ControlLeft/ControlRight (input.js:33);\n- _shouldBlockKey calls preventDefault (input.js:278-286), which Chromium ignores for reserved accelerators (Ctrl+W/T/N, Ctrl+Shift+W/T/N, Ctrl+Tab);\n- keyboard lock is engaged only in fullscreen (menus.js:128-143);\n- `grep -rn beforeunload src/ index.html` finds nothing;\n- the only mitigations are the loading tip (menus.js:533) and the known-limitation note (docs/notes/player.md).\n\nCDP can't trigger the browser accelerator itself, so I tested the close path with my script E:/playground/minecraft/tools/out/snap-w1/tools/out/vp/closetab.mjs. It runs a saved autostart world (save=1), makes edits, then calls Page.close (which runs beforeunload/pagehide like a user close) and reads IndexedDB from a new tab.\n- Scenario A (code as is): no dialog, the tab closes immediately.\n- Scenario B (the proposed handler injected): a 'beforeunload' dialog appears, so the user could cancel.\nSo the missing confirmation is real, and the proposed fix works.\n\nThe data-loss part is overstated. In scenario A, the async save from visibilitychange/pagehide persisted everything: 12/12 edited blocks and the new player position. Loss only appeared with many dirty chunks. With 169 modified chunks (A2), only 16/169 survived, the first SAVE_BATCH, because World._saveAll awaits each 16-chunk transaction before starting the next. With the handler and the dialog accepted (B2), 32/169 survived.\n\nSo the real impact is an abrupt exit to the desktop or browser whenever a Ctrl-sprinter presses W while Ctrl is held. That is frequent with the default bindings and disruptive, so major is defensible. Typical progress is not lost; only very large unsaved edits (e.g. /fill or explosions over more than 16 chunks) are.",
+  "refinedFix": "1) In Game._attachDomListeners (game.js ~989), add:\nwindow.addEventListener('beforeunload', (e) => { if (this.world && this.state === 'playing' && !this.options?.automation) { this.saveWorld().catch(() => {}); e.preventDefault(); e.returnValue = ''; } });\nChrome shows 'Leave site?' only after sticky user activation, which every real player has. The harness's Browser.close skips beforeunload, and the automation guard keeps tests unaffected.\n2) Make the unload save robust. On pagehide, write the meta plus ALL dirty chunks in ONE IndexedDB transaction, issued synchronously inside the handler (e.g. a World.saveAllSync() that encodes every modified chunk and calls a single putChunks). Today the batches are chained with awaits, and the page dies after the first one.\n3) Optional: add an Options toggle for sprint mode or a rebindable sprint key. Show the Ctrl+W tip in-game (action bar) the first time Ctrl-sprint is used outside fullscreen.",
+  "owners": [
+   "fixer",
+   "survival",
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "FIXER: beforeunload 'Leave site?' dialog while unsaved progress exists; SURVIVAL: one-time tip recommending double-tap W on the first Ctrl-sprint outside fullscreen."
+ },
+ {
+  "dimension": "world",
+  "id": "WORLD-1",
+  "title": "Closing or reloading the tab loses everything since the last autosave: the pagehide/visibilitychange save never reaches IndexedDB",
+  "severity": "major",
+  "files": [
+   "src/game.js:997-1006 (visibilitychange / pagehide handlers call async saveWorld())",
+   "src/game.js:732-746 (_saveNow: await saveWorldMeta(meta) then await world.save())",
+   "src/world/world.js:973-990 (_saveAll awaits _flushUnloadSaves, then writes 16-chunk batches one after another)",
+   "src/world/storage.js:323-346, 412-417 (each put is a separate async transaction with no commit())"
+  ],
+  "evidence": "Without the fix: 0 of 25 edits and 0 chunk records survived a reload done 3 s after the edits, and 0 of 25 survived closing the browser 5 s after the edits (persistent profile, fixed origin). With a 32 s wait (so the autosave ran first), 25 of 25 survived. A trace (tools/out/qa/abrupt-steps-trace.json) shows that during unload saveWorldMeta starts ('meta-start@5028'), 'meta-done' never appears, and storage.saveChunks is never called. The world meta is lost as well (tools/out/qa/abrupt-meta-steps.json): after the reload, lastPlayed is 4266 ms older than the reload, time is 1000 instead of 20000, player y is 79 instead of 140, and the 33 diamonds given just before the reload are missing. Fix probe: a pagehide handler that synchronously opens ONE readwrite transaction over ['worlds','chunks'], puts the meta plus encodeChunkRecord() for every modified chunk and calls tx.commit() kept 25 of 25 edits, 27 chunk keys and a fresh lastPlayed (1.5 s) (tools/out/qa/fixprobe.mjs + fixprobe5-steps.json). The same code without tx.commit() lost everything (fixprobe6). It also lost everything when queued behind the game's own uncommitted async 'worlds' transaction (fixprobe3). A chunks-only synchronous transaction with commit() worked (fixprobe2).",
+  "expected": "SPEC §9.10 says 'Autosave every 30 s and on quit / visibilitychange hidden'. Closing the tab, pressing F5 or closing the browser should keep block edits, player position, inventory and time, just as Minecraft saves when the window is closed.",
+  "actual": "Everything since the last 30 s autosave is silently discarded: blocks, position, inventory, time and the world-list order (lastPlayed). Autosave also stops while the pause menu is open, so 'pause, then close the tab' loses everything since the last autosave.",
+  "suggestedFix": "Add a synchronous unload path and call it from pagehide and from visibilitychange (hidden) instead of the async saveWorld():\n1. World.collectUnsaved() returns the modified READY chunks plus the _unloadSaves entries.\n2. Storage.saveAllSync(worldId, meta, chunks) uses the already-open IDBDatabase (IDBBackend._db) to create one transaction(['worlds','chunks'], 'readwrite', {durability:'relaxed'}) inside the event handler. It puts the meta and encodeChunkRecord(blocks) for each chunk, then calls tx.commit().\n3. Clear the modified flags only in oncomplete, and use a flag so the two events issue only one write.\n4. Do not start the async meta save first: the sync transaction must not queue behind an uncommitted readwrite transaction on 'worlds'.\n5. Also add tx.commit() to the normal async puts, and save when the pause menu opens or pointer lock is lost.",
+  "repro": "cd E:/playground/minecraft/tools/out/snap-w1 && node tools/out/qa/harness-qa.mjs --url index.html --wait-for \"window.__game\" --steps tools/out/qa/abrupt-steps.json\nThe steps clear storage, create a world with game.createWorld + ui.startWorld, set 25 glowstone blocks at y=190 in 25 chunks, wait 3 s, call location.reload(), re-enter the world from listWorlds() and verify (result: keys 0, ok 0, bad 25).\nWindow-close variant: QA_PORT=18731 QA_USER_DATA=<dir> node tools/out/qa/harness-qa.mjs --url index.html --wait-for \"window.__game\" --steps tools/out/qa/close-1.json, then the same command with close-2.json.\nharness-qa.mjs is a copy of tools/harness.mjs that adds --js-flags=--expose-gc, a fixed port (QA_PORT) and a persistent profile (QA_USER_DATA).",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced in the snapshot on every exit path I tried. Code: game.js:997-1005 calls the async saveWorld(). _saveNow (game.js:732-746) awaits saveWorldMeta(), and only after that transaction's complete event does it start world.save(), which then writes in chained 16-chunk batches. So only the meta transaction is created inside the pagehide task, without commit(), and no chunk transaction is ever created.\n\nRuns (harness-qa.mjs):\n- abrupt-steps.json (reload 3 s after the edits): keys 0, ok 0, bad 25.\n- abrupt-steps-trace.json: [\"meta-start@5043\",\"pagehide@5043\",\"vis:hidden@5043\"]. No meta-done and no chunks-start.\n- abrupt-steps-32.json (autosave ran first): 25/25 ok, 40 keys.\n- Browser close with a persistent profile (tools/out/vw/profile-close, port 18755, close-1/close-2): 0/25.\n- Real tab close via window.close() on a script-opened tab (tools/out/vw/tabclose.mjs): 0/25 edits and 0 chunk keys. The meta WAS written (lastPlayed 3 ms after the close, the 33 given diamonds present). On a plain tab close the inventory therefore persists while block edits are lost. That desync allows item duplication in survival: mine ore, close the tab within 30 s, and the ore is back while the item is kept.\n- abrupt-meta-steps.json (reload): lastPlayedVsReload -4269, time 1000, playerY 79, inv false, so the meta is lost too on reload.\n\nFix probes:\n- fixprobe5 (one synchronous worlds+chunks transaction with commit): 25/25, lastPlayed 1.5 s old.\n- fixprobe6 (same without commit): 0/25.\n- fixprobe3 (sync transaction queued behind the game's uncommitted 'worlds' transaction): 0/25. My transaction log (tools/out/vw/txlog-steps.json) shows tx1 'worlds' created by the game and tx2 created with commit() called, and neither completed.\n- fixprobe2 (chunks only): 25/25.\n- My extra probes: E3 (tools/out/vw/e3-steps.json) adds commit() to the async puts and keeps the sync handler: 25/25, 27 keys, fresh lastPlayed. E4 (commit() only, existing handlers): meta saved, chunks 0/25, so commit() alone is not enough.\n\nAutosave pauses with the menu: the timer is only advanced inside if (!this.paused) at game.js:363, and setPaused does not save. SPEC §9.10 requires a save on quit / visibilitychange hidden. Major is justified: this is silent loss of player edits on the most common way to leave the game.",
+  "refinedFix": "Root cause: the unload save needs at least 3 IndexedDB transactions chained through complete events. Only the first (meta, uncommitted) starts before the page dies.\n\n1. Add Storage.saveAllSync(worldId, meta, chunks) for the IDB backend.\n   - If this._b._db is open: synchronously create ONE db.transaction(['worlds','chunks'], 'readwrite', {durability: 'relaxed'}), put the meta and encodeChunkRecord(c.blocks) for every chunk, call tx.commit(), and return a promise for oncomplete.\n   - Memory backend: no-op. _db === null: fall back to the async save.\n2. Add World.collectUnsaved(). It returns the READY && modified chunks, with their editCount, plus all _unloadSaves entries. In oncomplete, clear modified only where editCount is unchanged, delete the written _unloadSaves entries and add the keys to _savedKeys.\n3. Add Game._saveSync(). It fills the meta as _saveNow does (lastPlayed, time, player.serialize(), mode) and calls saveAllSync.\n   - Call it from pagehide AND from visibilitychange === 'hidden', instead of saveWorld().\n   - Use a once-per-hide flag that is reset when the page becomes visible.\n   - Do not start the async meta save first.\n4. Call tx.commit() after the last request in IDBBackend.putWorld, putChunks and deleteWorld. An autosave or unload flush that is in flight at pagehide then commits instead of blocking the sync transaction: fixprobe3 0/25 becomes 25/25 in E3.\n5. Call saveWorld() when the game pauses (setPaused(true), pause menu, lost pointer lock).\n6. Add a regression harness: edit 25 chunks, reload after 3 s, and check both the blocks and the meta (inventory/time/position). This also covers the inventory/world desync.",
+  "owners": [
+   "fixer",
+   "world"
+  ],
+  "status": "fixed",
+  "leadNote": "Same as CODE-2."
+ },
+ {
+  "dimension": "survival",
+  "id": "SURV-1",
+  "title": "Torches cannot be placed on walls: right-clicking a block's side face does nothing, with no feedback",
+  "severity": "major",
+  "files": [
+   "src/world/blocks.js:171-175 (torch has needsSupport 'solid' and only a standing variant)",
+   "src/game/interaction.js:387-397 (placeBlock rejects the placement when NEEDS_SUPPORT is set and the cell below is not solid)",
+   "src/world/registry.js:160-165 (hasSupport only checks the block below), 289-309 (getPlacementBlock has no wall variant)",
+   "src/world/mesher.js (has only the standing-torch model; SPEC §7 defines only that one)"
+  ],
+  "repro": "node tools/harness.mjs --url \"index.html?autostart=1&seed=42&mode=survival\" --wait-for window.__ready --steps tools/out/qa/p-torch4.json. The steps are: debug.tp(6.5,58,8.5) into the tunnel cave under spawn, give 16 torches, press Digit1, real right-click on the floor (this works), then debug.lookAt(8.0,59.5,8.5) so the crosshair is on the west face of wall stone (8,59,8), where cell (7,59,8) is air, then three real right-clicks.",
+  "evidence": "Spy output after the 3 right-clicks: {wallCellAfter3Clicks:'air', inv:'0:torchx15', audioCalls:[]}. No torch is placed, none is consumed, and there is no sound or hand swing. Screenshot E:/playground/minecraft/tools/out/snap-w1/tools/out/qa/p10-b-wall-torch-refused-lit.png shows the wall face outlined and 15 torches still in hand. The same refusal happened on wall (8,59,13) in tools/out/qa/p-iron.json. Floor placement works and gives block light 14.",
+  "expected": "As in Minecraft, right-clicking a side face places a wall torch attached to that block (light 14, drops when the block is removed). Only bottom faces are refused. Torches on walls are the normal way to light tunnels.",
+  "actual": "Only standing torches on top of solid cubes exist. Clicking any wall fails without any feedback, so in a cave the player has to look for floor spots.",
+  "suggestedFix": "Add hidden wall-torch variants (wall_torch_north/south/east/west; item 'torch'; emission 14; cutout layer; selection box against the wall) and a tilted-post model in the mesher. In getPlacementBlock/interaction.placeBlock, choose the variant facing the clicked face when that face is horizontal (0,1,4,5), and check support against the clicked block (a solid full cube) rather than the block below. Extend hasSupport and BlockUpdater._check so a wall variant checks its attached side and pops off with a torch drop when that block is broken.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Code: torch (blocks.js:171-175) is the only torch block. It has needsSupport 'solid', and hasSupport (registry.js:160-165) only looks at the block below. getPlacementBlock has no wall variant, and interaction.placeBlock (line 397) checks world.getBlock(x, y-1, z) of the placement cell.\n\nRepro 1 (tools/out/vsurv/torch1.json, seed 42 survival): tp(6.5,58,8.5), give 16 torches. The target was stone (8,59,8), face 1; the placement cell (7,59,8) was air with air below it. After three real right-clicks the cell was still air, the slot still held 16 torches, there were 0 playBlock/play calls and 0 swings. Screenshot: tools/out/vsurv/torch1-wall.png.\n\nRepro 2 (tools/out/vsurv/torch2.json, flat world, cobblestone wall at z=-3):\n- Right-clicking the wall's south face at y=6 (air under the target cell) placed nothing and kept 10 torches.\n- Right-clicking the same wall face at y=4 (grass under the cell) put a STANDING torch on the ground in front of the wall instead of on the wall (tools/out/vsurv/torch2-flat.png).\n\nIn Minecraft, StandingAndWallBlockItem tries the clicked face's opposite direction first, so clicking a sturdy side face always gives a wall torch. This is a real, highly visible Minecraft-fidelity gap in wave-1 content. Lighting tunnels and caves normally relies on wall torches. Major is reasonable.",
+  "refinedFix": "1. New blocks: append four hidden variants after the last id, wall_torch_north/east/south/west. Set item 'torch', emission 14, cutout layer, solid false, hardness 0, sound wood. Give each a per-facing selection box like Minecraft (about 5.5..10.5 px wide, 3..13 px tall, 5 px deep against the wall). Add a new support kind meaning \"attached horizontal neighbour must be a solid full cube (IS_SOLID && RENDER.CUBE)\".\n2. Placement, following Minecraft's StandingAndWallBlockItem: build the candidate directions with the clicked face's opposite first, then the player's nearest look directions, and skip UP.\n   - DOWN: use the standing torch if hasSupport(below).\n   - Horizontal: use the matching wall variant if that neighbour is a sturdy cube.\n   - Refuse only if no candidate works.\n   This also fixes the current case where a click on a wall side above a floor puts a standing torch on the floor.\n3. Support updates: BlockUpdater.blockChanged currently queues only (x,y,z) and (x,y+1,z). It must also queue the four horizontal neighbours, and _check must test a wall variant against its attached block, popping it with a torch drop.\n4. Mesher: the vertex format stores positions in 1/16-block steps, so a post rotated 22.5° cannot be represented exactly. Emit a sheared post instead: a 2x2 px bottom against the wall at about y=3/16, the top shifted about 4 px away from the wall at about y=13/16, all vertices on whole pixels, same UVs as the standing torch. Crack overlay, icons, pick-block and drops resolve through item 'torch'.\n5. Update SPEC §5/§7.",
+  "owners": [
+   "survival",
+   "world",
+   "lead"
+  ],
+  "status": "fixed",
+  "leadNote": "Same as PLAYER-1."
+ },
+ {
+  "dimension": "survival",
+  "id": "SURV-2",
+  "title": "Leaves never decay: felled trees leave permanent floating canopies and drop no saplings or apples",
+  "severity": "major",
+  "files": [
+   "src/world/world.js:463-484 (tick) and ~1044-1051 (_randomTick only handles grass, saplings, stacked plants and ice; there is no leaves kind)",
+   "src/world/blocks.js:63-65, 98-100, 137-139, 145-147 (the sapling/apple drops on leaves can only be obtained by punching each leaf)"
+  ],
+  "repro": "Autostart with seed 42 in survival. Break the five logs of the oak at (30,68..72,-16). I did this with real left-click holds in tools/out/qa/p-wood.json; tools/out/qa/p-leaves.json uses interaction.breakBlock. Count oak_leaves in x 26..34, y 68..76, z -20..-12, then call world.tick(Math.random, 0.25) 6000 times (5 game minutes, about 4.4 random ticks per block).",
+  "evidence": "p-leaves.json output: {logsLeft: air x5, leaves: 59} followed by {leavesAfter6000Ticks: 59}. Screenshot E:/playground/minecraft/tools/out/snap-w1/tools/out/qa/p11-floating-leaves.png shows the canopy floating with no trunk. Leaf decay appears neither in the SPEC §9.6 tick list nor in SPEC-wave2, so it is a fidelity gap that no wave covers. For comparison, saplings grow correctly (an oak grew after 19,503 ticks, which matches Minecraft).",
+  "expected": "In Minecraft, leaves with no log within 6 steps decay on random ticks, usually within 1-3 minutes, and drop their loot (5% sapling, 0.5% apple for oak). That is the normal way to get saplings and apples after chopping trees.",
+  "actual": "Leaves stay forever. Every chopped tree leaves a floating canopy, and saplings and apples can only be obtained by breaking leaves one at a time.",
+  "suggestedFix": "Add a T_LEAVES random-tick kind for the three leaf ids. Run a bounded BFS (distance up to 6, through leaves) looking for any log (including _x/_z variants). If none is found, set the block to AIR and pop getDrops(leafId, 0) through onDropItem, with break particles. Keep player-placed leaves from decaying, as Minecraft's persistent=true does, for example with hidden persistent leaf ids returned by getPlacementBlock.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Code: RANDOM_TICK (world.js:56-65) only registers grass, snowy grass, the three saplings, sugar cane, cactus and ice. _randomTick (1044-1051) has no leaves case. A grep of src/ for decay/leaves logic finds nothing else that removes leaves (blockupdates only handles support and gravity).\n\nRepro (tools/out/vsurv/leaves1.json, seed 42): the oak at (30,68..72,-16) has logs at 68-72. In x 24..36, y 62..80, z -22..-10 there are 59 leaves and no other logs. After interaction.breakBlock on all 5 logs, all five cells are air. Then 6000 world.tick(Math.random, 0.25) calls (5 game minutes, about 4.4 random ticks per block) still leave exactly 59 leaves.\n\nThe reporter's screenshot tools/out/qa/p11-floating-leaves.png shows the trunkless floating canopy. Leaf decay is neither in SPEC §9.6 nor in SPEC-wave2, nor in the out-of-scope list, so this is a genuine fidelity gap. Every felled tree leaves a permanent canopy, and saplings/apples can only come from punching leaves.",
+  "refinedFix": "1. Ticking: set RANDOM_TICK for oak/birch/spruce leaves to a new T_LEAVES kind. _tickLeaves runs a bounded BFS over 6-connected leaf cells (any leaf id) up to distance 6, with a preallocated queue and a visited stamp array. It succeeds as soon as any log id (oak/birch/spruce, including the _x/_z variants) is reached.\n2. Unloaded chunks: world.getBlock returns AIR for chunks that are not loaded. Abort without decaying when the search reaches a chunk that is not READY, otherwise leaves at the edge of the loaded area decay wrongly.\n3. Decay: if no log is found, setBlock(AIR) through the normal update path. Pop getDrops(id, 0, rng) via onDropItem; Minecraft also drops sticks at 2% (1-2), which blocks.js lacks. Play break particles and sound through the same pop hook proposed in AUDIO-2.\n4. Player-placed leaves: add hidden persistent ids returned by getPlacementBlock for leaf items, with item = base leaves; worldgen keeps the decaying ids. The names must still end in '_leaves' (e.g. persistent_oak_leaves), because the mesher's leaf animation (mesher.js:130) and game.js:67 detect leaves by that suffix.\n5. Tests: a trunkless canopy decays, a canopy with a trunk does not, and leaves bordering an unloaded chunk do not.",
+  "owners": [
+   "world",
+   "lead"
+  ],
+  "status": "fixed",
+  "leadNote": "WORLD: leaves decay (no log within 6 steps) with sapling/apple drops; player-placed leaves never decay."
+ },
+ {
+  "dimension": "survival",
+  "id": "AUDIO-1",
+  "title": "Sound effects are calibrated through a cold limiter, so in game they play 6-13 dB louder than intended, footsteps are nearly as loud as block breaking, and UI clicks clip above 0 dBFS",
+  "severity": "major",
+  "files": [
+   "src/game/audio.js:1727-1743 (master DynamicsCompressor: threshold -6 dB, ratio 12, attack 2 ms; WebAudio applies automatic make-up gain)",
+   "src/game/audio.js:2437-2450 renderSoundOffline (creates a fresh SoundCore; _start at line 1906 starts the sound at t = 5 ms)",
+   "src/game/audio.js:784-795 BLOCK_TRIM_DB and 1070-1091 SOUNDS gains (click gain 5)",
+   "tools/audio-calibrate.mjs (all its measurements go through renderSoundOffline)"
+  ],
+  "repro": "(1) node tools/harness.mjs --url tools/audio-test.html --sleep 800 --eval \"import('/tools/out/qa/preroll.js').then(m => m.run([['click','click',0.8],['place:wood',{kind:'place',material:'wood'},0.8],['break:stone',{kind:'break',material:'stone'},0.8],['hurt','hurt',0.8],['step:stone',{kind:'step',material:'stone'},0.8],['pop','pop',0.8]])).then(v => JSON.stringify(v))\". This renders each sound through the real SoundCore with the same seeds, once started at 5 ms (as the calibration does) and once after 200 ms of silence (as in the game, where the limiter has settled). (2) Live capture after the mixer's compressor in the running game: node tools/harness.mjs --url \"index.html?autostart=1&seed=42&mode=survival\" --wait-for window.__ready --steps tools/out/qa/p-capture2.json (and p-capture.json, p-rec.json).",
+  "evidence": "Fresh compressor with the mixer's settings on a -30 dBFS tone (tools/out/qa/comp2.js): gain is -13.5 dB at 5 ms, -7.7 dB at 25 ms, -2.8 dB at 50 ms and +0.7 dB at 100 ms, then settles at +2.1 dB (automatic make-up gain). Same sounds and seeds, started at 5 ms vs after a 200 ms pre-roll, at soundVolume 0.8 (A-weighted max-100 ms loudness / peak): click -31.8 -> -24.1 LA (peak -6.1 -> +1.5 dBFS); place:wood -30.5 -> -22.7 LA (peak -> +0.2 dBFS); break:stone -29.1 -> -22.0; hurt -24.4 -> -18.5; step:stone -42.1 -> -29.5 (+12.6 dB); pop -34.6 -> -22.3. At volume 1: hit:stone -37.1 -> -27.2 and step:grass -40.5 -> -31.6. Live output in the game: 8 UI clicks peaked between -0.4 and +2.3 dBFS, and 7 of them had 4-14 samples above 1.0; place:wood peaked at -1.4 to -2.4 dBFS; step:stone -31.6 LA and step:grass -35.9 LA, against break:stone -25.8 LA and hurt -21.5 LA. In a real gameplay recording (chop a log, place a block, Esc then click 回到游戏), the menu click was the only sound above full scale (+0.9 dBFS, 4 samples above 1.0).",
+  "expected": "What players hear should match the targets documented in audio.js (lines 778-783) and docs/notes/audio.md: break -28, place -29, step -40, hit -37, land -34 LA, UI click -30 LA, so footsteps sit about 12 dB below block breaking. The output should never exceed 0 dBFS.",
+  "actual": "Each sound gets a different boost of +6 to +13 dB, and short transients (steps, hits, pops) get the most. Footsteps end up only about 6 dB below breaking (-31.6 vs -25.8 LA) and as loud as the music's peaks (music measured at -28.6 LA max at volume 0.5). Every menu-button click is about -23 LA and hard-clips at the destination.",
+  "suggestedFix": "Measure with a settled limiter. In renderSoundOffline/renderMusicOffline, start the sound after at least 0.3 s of silence (for example ctx.suspend(0.3).then(() => { play; ctx.resume(); })) and analyse only after that point, or tap core.master before the compressor. Then re-run tools/audio-calibrate.mjs and lower BLOCK_TRIM_DB and the SOUNDS gains to match, allowing for the +2.1 dB make-up gain. Reduce the click gain so its 0.4 ms transient no longer outruns the 2 ms limiter attack. Add a final ceiling (a WaveShaper soft clipper or a fast second limiter) so the destination never receives |x| > 1.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Code:\n- SoundCore._buildMixer (audio.js:1728-1742) routes everything through a DynamicsCompressor (threshold -6, knee 6, ratio 12, attack 2 ms, release 0.2).\n- renderSoundOffline (2437-2450) builds a fresh OfflineAudioContext and SoundCore and plays at currentTime+0.005 (_start, line ~1906).\n- tools/audio-calibrate.mjs run() measures only through renderSoundOffline.\n\nCold limiter (tools/out/vsurv/compv.js trajectory()): a fresh compressor with these settings applies -13.2 dB at 8 ms, -9.9 at 20 ms, -3.2 at 50 ms, +0.55 at 100 ms, then a steady +2.13 dB (automatic make-up gain). The curve is identical for -30 and -20 dBFS input, so it is a cold-start state, not a reaction to the signal level.\n\nCold vs settled renders (same seeds, dry, 0.4 s silent pre-roll via suspend/resume, compare()): at soundVolume 1 the cold loudness matches the documented targets, which shows calibration was done cold:\n- click -29.7 -> warm -22.0 LA\n- place:wood -29.1 -> -22.6\n- break:stone -27.6 -> -20.2\n- hurt -22.2 -> -16.6\n- step:stone -39.0 -> -26.6 (+12.4)\n- step:grass -39.4 -> -30.5\n- hit:stone -36.7 -> -26.2\n- land:stone -33.0 -> -22.4\n- pop -32.3 -> -21.6\nSteps end up only about 6.4 dB below breaking instead of about 12.\n\nLive game (tools/out/vsurv/live.json): I tapped the real limiter output by hooking createDynamicsCompressor and adding a ScriptProcessor. 7 of 8 audio.play('click') peaked at +0.3 to +1.4 dBFS, with 2-10 samples above 1.0. place:wood peaked at -1.0 to -1.5 dBFS.\n\nThe analysis is correct. The shipped mix is louder than its documented targets, the balance favours short transients, and the UI click exceeds full scale.",
+  "refinedFix": "1. Measure with a settled limiter: in renderSoundOffline (and renderMusicOffline for consistency), call ctx.suspend(0.3).then(() => { play(); ctx.resume(); }) and analyse only after 0.3 s. Alternatively, tap core.master before the compressor and add the fixed +2.13 dB make-up.\n2. Re-run tools/audio-calibrate.mjs. My measured deltas suggest the trims drop by roughly: steps 12.5 dB, hits/lands 10.5, pop 10.7, breaks 7.4, places 6.5-7.8, click 7.7, hurt 5.6 (e.g. click gain 5 -> about 2).\n3. Put a real ceiling after the compressor, e.g. a WaveShaperNode with a soft-knee curve saturating at ±0.98 (oversample '2x'), so |x| <= 1 is guaranteed even for sub-millisecond transients that outrun the 2 ms attack.\n4. Add a self-check assertion: every sound rendered after the pre-roll has peak < 0 dBFS and loudness within ±1.5 dB of its target.",
+  "owners": [
+   "art"
+  ],
+  "status": "fixed",
+  "leadNote": "ART: warm-limiter calibration, soft-clip ceiling, all 102 sounds recalibrated (max peak -2.1 dBFS)."
+ },
+ {
+  "dimension": "render",
+  "id": "RENDER-1",
+  "title": "Translucent quads within a section are not depth-sorted while depth writes are on, so ice disappears behind water (frozen oceans seen from below) and water disappears behind ice depending on view direction",
+  "severity": "major",
+  "files": [
+   "src/render/renderer.js:1301-1343 (_drawTranslucent: depthMask(true) at 1320, back-face pass with cullFace(FRONT) at 1330 before the front-face pass)",
+   "src/world/mesher.js:444-468 (meshSection emits quads in fixed y->z->x order; no per-quad sort anywhere)",
+   "docs/notes/renderer.md:195-197 (calls this a 'rare' limitation)"
+  ],
+  "evidence": "Same pool, same camera spot underwater looking up: tools/out/rq/pool-ab-ice.png and p3-under-orig.png show no ice lid at all; the ice half looks exactly like open water (mean RGB 25.4,58.8,143.5 vs open water 29.5,67.1,162.3 in pool-under-up-east.png). With a glass lid (pool-ab-glass.png), or with the water removed (pool-ab-ice-noWater.png, 90.9,112.6,147.7), the lid shows. Real generated terrain (seed 42 frozen ocean, camera (307.5,57.5,272.5) looking up): in frozen-under-up.png and fz3-under-orig.png the ice floe looks like a dark recessed patch of water. As a runtime diagnostic I forced depthMask(false) during _drawTranslucent and the ice became visible (p3-under-nodepth.png, fz3-under-nodepth.png), which proves depth rejection is the cause. Why: under the ice, the water's top face (y+14/16) is a back face, so it is drawn in the first pass and writes depth. The ice's bottom face is 1/8 block farther away, is drawn in the later front-face pass, and fails LEQUAL. Sea-level ice (y=62) and the water under it (y=61) are always in the same section (sy=3), so every frozen ocean and river in the world is affected. The bug also depends on view direction: with ice at z=20, water at z=21 and gold at z=22, water is invisible through the ice from the north (order-A2.png, emitted ice-first) but visible in the mirrored setup from the south (order-B2.png).",
+  "expected": "As in Minecraft, ice seen from underwater shows through the water surface (both layers blend). Water behind ice is visible from every direction. Translucent results should not depend on emission order or camera direction.",
+  "actual": "A nearer translucent quad that is drawn earlier writes depth and hides any farther translucent quad in the same section. Ice ceilings vanish from below, and water behind ice disappears from some directions.",
+  "suggestedFix": "Do per-quad back-to-front sorting of translucent geometry, as Minecraft does. Keep quad centres for each section's translucent layer (or decode them from the packed vertices). When the camera enters a new block, re-sort the section's translucent index buffer by distance to the camera (only nearby sections need it, and translucent buffers are small). Draw all translucent quads, both facings, in that one sorted order instead of two facing passes; depth writes can stay. Turning off depth writes alone is not enough: my runtime test produced new ordering artifacts at ice-floe edges (tools/out/rq/fz3-above-nodepth-crop.png, dark triangles). Also update the 'rare' note in docs/notes/renderer.md.",
+  "repro": "index.html?autostart=1&seed=42&mode=creative&type=flat, then in the console: const d=__game.debug,f=(a,b,c,e,g,h,n)=>{for(let y=b;y<=g;y++)for(let z=c;z<=h;z++)for(let x=a;x<=e;x++)d.setBlock(x,y,z,n)}; f(30,4,30,40,9,40,'stone'); f(31,4,31,39,8,39,'water'); f(31,9,31,35,9,39,'ice'); f(36,9,31,39,9,39,'air'); __game.player.flying=true; d.tp(35.5,4.6,35.5); d.lookDeg(90,70);  -> the ice lid over the west half is not drawn. Run f(31,9,31,35,9,39,'glass') and the lid appears. Real world: seed=42 default world, d.tp(307.5,57.5,272.5), look up.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced, and the code shows why. In _drawTranslucent (renderer.js:1309-1338) each section draws back faces first (cullFace FRONT, polygonOffset 1,2) and then front faces, with depthMask(true) and LEQUAL. meshSection (mesher.js:444-468) emits quads in y->z->x order. Inside one section, a nearer quad drawn earlier writes depth and rejects farther translucent quads.\n\nEvidence, all in tools/out/vrender/:\n(a) Flat pool, camera underwater looking straight up across the ice/open-water boundary (r1b-up-boundary-orig.png). The ice half shows no ice texture. It is only darker: mean 25.7,59.3,144.2 vs 29.5,67.3,163.8 over open water, because sky light is lower under ice. With the facing-pass order swapped at runtime (r1b-up-boundary-frontfirst.png) the ice shows through the water surface (29.5,60.3,136.3). That shift proves the ice fragments were being depth-rejected. The real seed-42 frozen ocean at (307.5,57.5,272.5) behaves the same (r1c-frozen-under-orig.png vs r1c-frozen-under-frontfirst.png).\n(b) View-direction dependence (r1d-*.png). Setup: ice z=20, water z=21, gold z=22, seen from the north, plus the mirrored setup seen from the south. Disabling depth writes in the translucent pass changes 21.6% of the block region in the north view (the water block appears) and 0 pixels in the south view. So the water block behind the ice is silently dropped from one direction only.\n\nSeverity: the bug is real and view-dependent, and it contradicts the 'rare' note at renderer.md:195-197. But in natural terrain the difference from a correctly sorted result is modest. Water alpha is about 0.70 (176-188), so correctly sorted ice under water contributes only about 20%. From above, the two ice faces already hide about 88%, and rq/p3-above-orig vs p3-above-nowater differ by under 24 levels everywhere in the ice half. I would rate it minor rather than major. The clearest symptom is a water block behind ice vanishing from one side.",
+  "refinedFix": "Per-quad back-to-front sorting in one pass is the right fix: two facing passes can never order a near back face against a far front face. Details the suggested fix leaves out:\n(1) Give each section's translucent layer its own element buffer, because the shared quad index buffer cannot hold a per-section order.\n(2) Decode quad centres once at upload into a Float32Array. When floor(camera) changes, re-sort only sections within about 2 sections of the camera, using the existing allocation-free radix sort on squared distance. Farther sections keep their static order.\n(3) Dropping the two facing passes removes the back-face polygon offset that stops coplanar opposite faces (for example ice +Z and water -Z on the same block plane) from z-fighting. Replace it with a vertex-shader bias: move back-facing quads about 1/1024 block along +normal when dot(FACE_NORMAL[face], vPos) > 0. Alternatively, break sort ties so back-facing quads come first.\n(4) Keep depth writes on, because clouds are drawn after the translucent pass and rely on its depth.\n(5) Update tests/renderer.test.js:401-402, which expects 'back faces then front faces' with two draws per section, and the known-limitation note in docs/notes/renderer.md.",
+  "owners": [
+   "fixer",
+   "world"
+  ],
+  "status": "fixed",
+  "leadNote": "Wave-2 INTEGRATOR: per-quad back-to-front translucent sorting (own EBO per translucent layer, one double-sided pass + back-face depth nudge); verified before/after.",
+  "integratorNote": "INTEGRATOR wave 2: per-quad back-to-front sorting of translucent geometry. Each translucent section layer has its own element buffer; quad centres + faces are decoded at upload; sections whose camera distance changed enough (0.25 blocks nearby, d/16 farther, 24k quads/frame budget, nearest first) are re-sorted (distance² key, back-facing quads first on ties); one double-sided pass replaces the two facing passes, back-facing quads are nudged 2e-6·w behind coplanar front faces in the vertex shader instead of the polygon offset; depth writes stay on for the clouds. Verified before/after in Edge: ice lid seen from under water now shows (band luminance 27..29 -> 37..38), and water behind ice is visible from both sides (tools/out/w2int/render1-compare.png, render1b-crop.png). New unit test in tests/renderer.test.js."
+ },
+ {
+  "dimension": "code",
+  "id": "CODE-4",
+  "title": "Respawn ignores the spawn point's Y: /spawnpoint inside a room or cave respawns the player on the roof or surface",
+  "severity": "minor",
+  "files": [
+   "src/game/player.js:1031-1060 (respawn) and 1062-1077 (_snapToColumnTop: body.y = getTopY + 1)",
+   "src/game/commands.js:492-507 (/spawnpoint stores an exact x, y, z)"
+  ],
+  "evidence": "Harness, survival world, seed 42. /fill ~-3 ~3 ~-3 ~3 ~3 ~3 oak_planks (roof at y=84), then /spawnpoint gives spawnPoint {x:7.5, y:81, z:7.5}. After /kill and ui.respawn(), the player is at [7.5, 85, 7.5], on top of the roof (onRoof: true).\nAn earlier run with a hollow glass/stone box above the spot respawned the player at y=90 on top of the box.\nrespawn() sets y = sp.y but then _snapToColumnTop() always moves the player to the highest block of the column whenever the area is loaded.",
+  "expected": "As in Minecraft, a personal spawn point that is a safe standing spot (2 free cells, solid ground below) is used exactly. A surface or nearby search is only for the world spawn or an obstructed spawn point.",
+  "actual": "The player always respawns on the topmost block of the column, so spawn points in caves, houses or under trees are unusable.",
+  "suggestedFix": "In Player.respawn() (and the deferred _snapPending path), first test the stored spawn position: if the cells at sp.y and sp.y+1 are free of solids/liquids and the block below is solid, keep it. Otherwise fall back to a nearby safe-spot search (reuse Game._findStandingSpot) instead of the raw column top. Store a flag distinguishing a /spawnpoint (personal) from the world spawn if the world spawn should keep surface-snapping.",
+  "repro": "In a survival world: /fill ~-3 ~3 ~-3 ~3 ~3 ~3 oak_planks, then /spawnpoint, /kill, click 重生 -> player.y = roof + 1 instead of the spawn y",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced (E:/playground/minecraft/tools/out/snap-w1/tools/out/vcode/respawn.json):\n- /fill ~-3 ~3 ~-3 ~3 ~3 ~3 oak_planks reported '成功填充了 49 个方块'.\n- /spawnpoint reported '已将玩家的重生点设置为 7, 81, 7', and spawnPoint was {7.5, 81, 7.5}.\n- After /kill and ui.respawn(), the player was at [7.5, 85, 7.5]: blockBelow oak_planks, topY 84.\n- Screenshot E:/playground/minecraft/tools/out/snap-w1/tools/out/vcode/respawn-roof.png shows the player standing on the plank roof.\n\nCode: respawn() sets y = sp.y and then always calls _snapToColumnTop (getTopY + 1) when the area is loaded, or later via _snapPending in update (player.js:294). docs/notes/player.md describes this column-top design, so it is a deliberate simplification. But it contradicts the command's own exact-coordinate feedback and Minecraft's /spawnpoint semantics.\n\nSeverity minor is right.",
+  "refinedFix": "Minecraft's rule for a /spawnpoint position (ServerPlayer.findRespawnPositionAndUseSpawnBlock with forced=true) only requires the feet and head cells to be non-solid and non-liquid. No ground check; if obstructed it falls back to the world spawn.\n\nImplement:\n(1) /spawnpoint stores spawnPoint = {x, y, z, forced: true}. Persist `forced` in serialize/deserialize. /setworldspawn and the new-world spawn store forced: false.\n(2) In respawn() and in the deferred _snapPending path, when sp.forced and the chunk is loaded: if the cells (floor(sp.x), sp.y, floor(sp.z)) and y+1 are !IS_SOLID && !IS_LIQUID, keep y = sp.y exactly. Optionally also require solid ground below for safety. Otherwise fall back to the world spawn via Game._findStandingSpot(worldSpawn.x, worldSpawn.z, r).\n(3) Keep surface snapping only for the world spawn. Prefer _findStandingSpot over the raw getTopY+1, so the player does not land on leaves.",
+  "owners": [
+   "survival",
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "SURVIVAL: respawn honours a personal spawn point when the feet/head cells are free (else world spawn + chat message)."
+ },
+ {
+  "dimension": "code",
+  "id": "CODE-5",
+  "title": "The rd= URL override leaks into the saved settings on any settings change",
+  "severity": "minor",
+  "files": [
+   "src/main.js:51-53 (comment says 'URL overrides are session-only', but the override is merged into the live settings object)",
+   "src/game.js:877-904 (applySettings -> _persistSettings writes the whole this.settings object)"
+  ],
+  "evidence": "Fresh profile, URL index.html?autostart=1&seed=42&rd=3. eval: localStorage.getItem('webcraft.settings') -> null; __game.applySettings({ fov: 80 }); the saved webcraft.settings.renderDistance is 3.",
+  "expected": "rd= only affects the current session, as the comment in main.js states; persisted settings keep the user's own render distance.",
+  "actual": "Changing any option (FOV, volume, ...) during a session opened with rd= permanently writes that render distance to localStorage, so later normal sessions use it.",
+  "suggestedFix": "Keep session overrides separate: main.js passes sessionOverrides (e.g. {renderDistance}) to Game and does not mutate settings. Alternatively, _persistSettings() serializes {...this.settings, ...this._persistedValuesOfOverriddenKeys} so overridden keys keep their stored values unless the user explicitly changes them in the options screen.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced across sessions in one browser profile (E:/playground/minecraft/tools/out/snap-w1/tools/out/vcode/rd.json):\n1. Opened index.html?autostart=1&seed=42&rd=3. localStorage webcraft.settings was null and the live renderDistance was 3.\n2. ui.applySetting('fov', 80), the same path as the options slider. The saved settings now had renderDistance 3 and fov 80.\n3. Closed the tab and opened index.html?autostart=1&seed=42 without rd=. settings.renderDistance and world.renderDistance were both 3 (default 8).\n\nmain.js:53 merges the override into the live settings object despite its own 'URL overrides are session-only' comment, and _persistSettings (game.js:897-904) serializes the whole object.\n\nOnly users of the rd= parameter in a real profile are affected; the harness uses throwaway profiles. Severity minor.",
+  "refinedFix": "Have main.js pass the override separately, e.g. options.sessionOverrides = { renderDistance }. Game keeps `this._persistedBase = loadSettings()`. _persistSettings() writes `{ ...this.settings, ...pick(this._persistedBase, Object.keys(this._sessionOverrides)) }`.\n\nWhen applySettings changes an overridden key (the user moves the render-distance slider), delete that key from _sessionOverrides so the explicit choice is persisted. Also update _persistedBase on every persist.",
+  "owners": [
+   "fixer"
+  ],
+  "status": "fixed",
+  "leadNote": "Already fixed before wave 2 (main.js sessionOverrides); re-verified by FIXER."
+ },
+ {
+  "dimension": "code",
+  "id": "CODE-6",
+  "title": "Fidelity: sugar cane can be planted and grows anywhere on sand/dirt/grass with no adjacent water (and not on snowy grass)",
+  "severity": "minor",
+  "files": [
+   "src/world/blocks.js:160 (needsSupport ['grass_block','dirt','sand','sugar_cane'])",
+   "src/world/registry.js:160-165 (hasSupport(id, belowId) can only see the block below)",
+   "src/game/interaction.js:397 (placement support check)",
+   "src/world/blockupdates.js:121-128 (support popping)",
+   "src/world/world.js:1094-1101 (_tickStackPlant grows it regardless)"
+  ],
+  "evidence": "Node: hasSupport(SUGAR_CANE, SAND) === true; there is no way to express or check horizontal water adjacency. hasSupport(SUGAR_CANE, SNOWY_GRASS_BLOCK) === false.\nPlacement (interaction.placeBlock), support popping (BlockUpdater._check) and growth (World._tickStackPlant) all rely only on the block below, so a sugar cane farm works on dry land and removing the irrigation water never pops the cane.",
+  "expected": "As in Minecraft, sugar cane on grass/dirt/sand needs water (or frosted ice) horizontally adjacent to the block it stands on. It pops off when that water is removed. Snowy grass counts as grass.",
+  "actual": "Placeable and growable anywhere without water; cannot be placed on snowy grass.",
+  "suggestedFix": "Add a world-aware support check for sugar cane: when the block below is not sugar cane, require water/ice at one of the 4 horizontal neighbours of the block below. Use it in Interaction.placeBlock and BlockUpdater._check. When a liquid cell changes, also enqueue (x±1, y+1, z) and (x, y+1, z±1) so cane next to removed water pops. Add 'snowy_grass_block' to the support list.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced in game (E:/playground/minecraft/tools/out/snap-w1/tools/out/vcode/cane.json, screenshot cane-dry.png):\n- A single sand block in a meadow with no water within 6 blocks. Right-clicking with sugar cane via debug.use() placed it (placed:true, the item was consumed).\n- World._tickStackPlant grew it to 3 tall.\n- Placement on snowy_grass_block with water directly adjacent was refused (placed:false).\n\nThe code matches the finding: blocks.js:160 support list, registry.js hasSupport(id, belowId), interaction.js:397, blockupdates.js:121-128 and world.js:1094-1101 only look at the block below.\n\nThe gap is acknowledged as 'Not implemented' in docs/notes/world.md:99, but it is not intended Minecraft behaviour: SPEC worldgen requires cane 'next to water', and the CROSS plants accept snowy_grass_block. It is not wave-2 farming: cane placement and growth ship in wave 1.\n\nIt is a real but minor fidelity gap: cane farms work on dry land, and removing the irrigation never pops the cane.",
+  "refinedFix": "In Minecraft the requirement is WATER (or frosted ice, which does not exist here) horizontally adjacent to the block the cane stands on. Plain ice does NOT count, so drop 'ice' from the proposed fix.\n\nImplement canSugarCaneSurvive(world, x, y, z): the block below is sugar_cane, OR the block below is in {grass_block, snowy_grass_block, dirt, sand} AND one of (x±1, y-1, z), (x, y-1, z±1) is water (use isWater() once wave-2 flowing water lands).\n\nCall it in Interaction.placeBlock (refuse placement) and BlockUpdater._check (pop and drop). Keep hasSupport as the fast pre-check, so a block the player could place still never pops immediately.\n\nWhen any cell changes to or from a liquid, also enqueue (x±1, y+1, z) and (x, y+1, z±1).\n\nGrowth needs no water check: Minecraft grows cane regardless and relies on survival checks.",
+  "owners": [
+   "survival",
+   "world",
+   "lead"
+  ],
+  "status": "fixed",
+  "leadNote": "Same as PLAYER-3."
+ },
+ {
+  "dimension": "player",
+  "id": "PLAYER-2",
+  "title": "Respawn ignores the y of a /spawnpoint position and always puts the player on top of the column (e.g. on the roof above an underground base)",
+  "severity": "minor",
+  "files": [
+   "src/game/player.js:1031-1060 (respawn sets y from spawnPoint, then _snapToColumnTop overrides it)",
+   "src/game/player.js:1062-1077 (_snapToColumnTop: body.y = getTopY + 1 unconditionally)",
+   "src/game/commands.js:491-500 (/spawnpoint stores {x+0.5, y, z+0.5})"
+  ],
+  "evidence": "tools/out/qa/spawnpt.json on a flat world: build a 5x5 stone roof at y=8 over the player, stand at (0.5,4,0.5) and run /spawnpoint. Result: spawnPoint {x:0.5,y:4,z:0.5}. Then /kill (player.kill()) and press 重生 (ui.respawn()). The player is at [0.5, 9, 0.5], on top of the roof, instead of at y=4 inside the room.",
+  "expected": "Minecraft: /spawnpoint sets a forced respawn position. On respawn the player is placed exactly at (x+0.5, y, z+0.5) if that cell and the one above are free; if they're obstructed, the player falls back to the world spawn with a message. Players use this for spawns inside caves, bases and under roofs.",
+  "actual": "_snapToColumnTop() always moves the feet to getTopY(x,z)+1. Any personal spawn point below the column top (underground, indoors, under a tree) respawns the player on the roof or treetop. getTopY also counts non-solid blocks such as torches, flowers and short grass, so the player can also respawn floating 1 block above a plant.",
+  "suggestedFix": "In respawn(): if spawnPoint.y is finite and the cells at y and y+1 have no collision box and no liquid, keep that position and skip the snap. Fall back to the column top only when it's obstructed, or for the world spawn with no explicit y (optionally flag /spawnpoint points as forced:true). When snapping, use the highest solid/liquid block rather than getTopY, so plants and torches are skipped (same rule as Game._standingY).",
+  "repro": "T → /spawnpoint while standing in a closed room or cave → /kill → click 重生 → you appear on top of the terrain above the room.",
+  "verdict": "confirmed",
+  "verifyReasoning": "I reproduced this with E:/playground/minecraft/tools/out/snap-w1/tools/out/vp/sp1.json on a flat world.\n(1) 5x5 stone roof at y=8, player at (0.5,4,0.5), /spawnpoint. spawnPoint becomes {x:0.5,y:4,z:0.5} and chat says '已将玩家的重生点设置为 0, 4, 0'. After /kill (death screen) and ui.respawn(), the player is at [0.5, 9, 0.5], on top of the roof. sp1_roof.png shows the chat message and the view from the roof.\n(2) '/spawnpoint @s 10 4 10' with a single plank at (10,12,10): the player respawns at [10.5, 13, 10.5], on the plank.\n(3) A torch on the spawn column: right after respawn y=4.9956 (snapped to getTopY+1 = 5), and a moment later the player has fallen to y=4. That part is real but harmless (a 1-block drop, no damage).\n\nCode: Player.respawn (player.js:1031-1060) sets y from spawnPoint, then _snapToColumnTop (1062-1077) sets body.y = getTopY+1 unconditionally. The deferred _snapPending path (player.js:294) does the same. Meanwhile commands.js:492-502 stores and announces an exact y.\n\nJava Edition honours a forced /spawnpoint exactly (x+0.5, y+0.1, z+0.5) when the feet and head cells are free, and otherwise falls back to the world spawn with a message. The player notes describe the snap for the world-spawn column, but /spawnpoint's promise of a y is broken. Minor severity is right.\n\nThe suggested fix needs one change. Applying the 'keep y if free' rule to every spawn point would also stop the world spawn from following terrain changes, e.g. respawning mid-air over a pit dug at spawn. The forced flag should be mandatory, not optional.",
+  "refinedFix": "1) In /spawnpoint (commands.js:498), store player.spawnPoint = { x: x+0.5, y, z: z+0.5, forced: true }, and serialize/deserialize the flag (player.js serialize/deserialize).\n2) In Player.respawn(), and in the deferred _snapPending path once the chunk is ready: if spawnPoint.forced, test the feet cell (x,y,z) and head cell (x,y+1,z) for no collision box and not liquid (Minecraft isPossibleToRespawnInThis).\n- If both are free, set the position to (x, y, z) and skip the snap.\n- If not, fall back to the world spawn (game.worldMeta.spawn) and post a chat message such as '你的重生点已被阻挡' (Minecraft block.minecraft.spawn.not_valid).\n3) For non-forced (world) spawns, keep snapping to the surface, but use the highest motion-blocking block (IS_SOLID or liquid), e.g. Game._standingY / _findStandingSpot, instead of getTopY, so torches, flowers and short grass don't lift the player.",
+  "owners": [
+   "survival",
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "Same as CODE-4."
+ },
+ {
+  "dimension": "player",
+  "id": "PLAYER-3",
+  "title": "Sugar cane can be planted without water and cactus can be placed next to solid blocks (only the block below is checked)",
+  "severity": "minor",
+  "files": [
+   "src/world/blocks.js:126-131 (cactus needsSupport ['sand','cactus']), 159-162 (sugar_cane needsSupport ['grass_block','dirt','sand','sugar_cane'])",
+   "src/world/registry.js:159-165 (hasSupport(id, belowId) has no neighbourhood information)",
+   "src/game/interaction.js:397",
+   "src/world/blockupdates.js:121-128"
+  ],
+  "evidence": "tools/out/qa/plants.json with real right-clicks on a flat world. Sugar cane placed on grass at (0,4,-2) is placed with 0 water blocks within ±5 blocks, and it's still there 3 s later. A cactus placed on sand at (5,4,-2) next to stone at (6,4,-2) is placed and stays.",
+  "expected": "Minecraft: sugar cane can only be placed (and only survives) on grass/dirt/sand when at least one horizontal neighbour of that ground block is water, or when the block below is sugar cane. A cactus can't be placed, and pops off, when any of its 4 horizontal neighbours is solid.",
+  "actual": "Both plants can be placed anywhere their block-below rule allows. This allows builds that Minecraft forbids, e.g. sugar cane farms with no water and cactus walls.",
+  "suggestedFix": "Replace or extend hasSupport with canSurvive(world, x, y, z, id) and use it in Interaction.placeBlock and BlockUpdater._check. For sugar_cane: below === sugar_cane, or below ∈ {grass_block, dirt, sand} with water at one of (x±1, y-1, z) / (x, y-1, z±1). For cactus: the existing below rule plus no IS_SOLID block at the 4 horizontal neighbours. In BlockUpdater.blockChanged also enqueue the 4 horizontal neighbours (and the cells above the neighbouring ground for sugar cane) so violations that appear later make the plant pop and drop its item.",
+  "verdict": "confirmed",
+  "verifyReasoning": "I reproduced this with real right-clicks: E:/playground/minecraft/tools/out/snap-w1/tools/out/vp/pl1.json on a flat world.\n- Sugar cane placed on grass at (0,4,-2) with 0 water blocks in x -8..8, z -10..6, y 2..5. The inventory went from 5 to 4.\n- A cactus placed on sand at (5,4,-2) with stone at (6,4,-2) was placed and stays.\n- A cactus at (9,4,-2) with dirt set next to it afterwards stays (cactusLater = 'cactus').\n- Forcing World._tickStackPlant makes the waterless cane grow to 3 tall.\npl1.png shows the waterless cane stack and both cacti touching stone and dirt.\n\nCode: interaction.js:397 and blockupdates.js:121-128 call hasSupport(id, below) only (registry.js:159-165), and the blocks.js rules at 126-131 / 159-162 list only the block below.\n\nMinecraft's SugarCaneBlock.canSurvive needs water next to the soil block, and CactusBlock.canSurvive fails if any horizontal neighbour is solid (or lava). So this is a real fidelity gap. It is a documented known limitation, though: docs/notes/world.md:99-101 says 'Not implemented ... horizontal cactus breaking, sugar cane water requirement'. Worldgen already follows both rules (worldgen.js _waterAdjacent / _cactusOk), so the fix won't pop generated plants. Minor severity is appropriate.",
+  "refinedFix": "Add canSurvive(world, x, y, z, id) in registry.js (or blockupdates.js) and use it in both Interaction.placeBlock and BlockUpdater._check.\n- sugar_cane: below === sugar_cane, OR below ∈ {grass_block, snowy_grass_block, dirt, sand} AND water at one of (x±1, y-1, z) / (x, y-1, z±1). Minecraft's DIRT tag includes snowy grass. Ice does not count.\n- cactus: below ∈ {sand, cactus}, AND none of the 4 horizontal neighbours is IS_SOLID (this includes another cactus and glass) or lava, AND the block above is not a liquid.\nBlockUpdater.blockChanged(x,y,z) must also enqueue:\n- the 4 horizontal neighbours (for cactus);\n- (x±1, y+1, z) and (x, y+1, z±1) (cane whose water was scooped with a bucket).\nWorld._tickStackPlant goes through setBlock and the updater, so a newly grown cactus next to a block will then pop and drop its item, as in Minecraft cactus farms. Update docs/notes/world.md:99-101 accordingly.",
+  "owners": [
+   "survival",
+   "world",
+   "lead"
+  ],
+  "status": "fixed",
+  "leadNote": "Wave 2: lead canStay (cactus/sugar-cane neighbour rules, sugar cane on snowy grass), SURVIVAL placement, WORLD neighbour updates."
+ },
+ {
+  "dimension": "world",
+  "id": "WORLD-2",
+  "title": "Generated floating sand/gravel never falls when neighbouring blocks are mined; cactus and sugar cane ignore horizontal survival rules",
+  "severity": "minor",
+  "files": [
+   "src/world/blockupdates.js:62-66 (blockChanged enqueues only (x,y,z) and (x,y+1,z))",
+   "src/world/blockupdates.js:117-134 (_check)",
+   "src/world/registry.js:160-165 (hasSupport checks only the block below)"
+  ],
+  "evidence": "Floating blocks (tools/out/qa/floating.mjs, seed 42): there are 170 sand/gravel blocks with air below within ±64 blocks of spawn (cave ceilings, e.g. gravel at (-57,55,-2..2)). After setting the horizontally adjacent stone at (-57,55,-3) and at (-57,55,3) to air and waiting 30 frames, the gravel is still there (stillThere: true).\nCactus and sugar cane: on a stone platform at y=150, a cactus on sand with stone placed directly next to it survives (cactusNextToStone: true). Sugar cane on sand with 0 water blocks around can be placed (setBlock true) and survives 200 world.tick() calls (caneWithoutWater: true).\nworld.md lists cactus and sugar cane under 'Not implemented'.",
+  "expected": "As in Minecraft, every block change notifies all 6 neighbours:\n- A falling block with a free cell below falls on any neighbour update. This is the classic gravel-in-caves hazard; generated floating gravel and sand fall once something next to them changes.\n- Cactus breaks, and cannot be placed, when a solid block is horizontally adjacent.\n- Sugar cane needs water or ice next to the block below it, and pops when that water is removed.",
+  "actual": "Updates propagate only vertically. Generated sand and gravel ceilings stay floating forever. Cactus walls, and sugar cane in the middle of a desert, are possible.",
+  "suggestedFix": "- In BlockUpdater.blockChanged, enqueue all 6 neighbours. This is cheap because _check returns immediately for ordinary blocks.\n- Replace hasSupport(id, below) with a position-aware canSurvive(world, x, y, z, id):\n  - cactus: none of the 4 horizontal neighbours is solid;\n  - sugar cane: the block below is cane, or it is grass/dirt/sand with water or ice horizontally adjacent to it.\n- Use the same function for placement in interaction.js.",
+  "verdict": "confirmed",
+  "verifyReasoning": "The code proves it. BlockUpdater.blockChanged (blockupdates.js:62-66) enqueues only (x,y,z) and (x,y+1,z). _check/_fall re-enqueue only y+1. hasSupport (registry.js:160-165) looks only at the block below.\n\nReproduced on seed 42:\n- qa/floating.mjs: 170 floating sand/gravel blocks found; gravel at (-57,55,-2) and (-57,55,2) stayed after the adjacent stone was set to air (stillThere true).\n- My own probe (tools/out/vw/plants.mjs): 12 floating gravel blocks had a horizontally adjacent stone mined; fell 0 of 12.\n- A cactus on sand with stone placed next to it survived 40 ticks (cactusNextToStone true).\n- Sugar cane on sand with 0 water within ±2 could be placed (setBlock true) and survived 200 ticks.\n\nworld.md lists the cactus and cane rules as 'Not implemented'. The floating gravel is not listed, and it is a classic Minecraft hazard. Worldgen already enforces both plant rules (worldgen.js _cactusOk and _waterAdjacent), so a runtime rule would not pop generated plants. Minor is appropriate.",
+  "refinedFix": "1. Add a BlockUpdater._notify(x,y,z) helper that enqueues all 6 neighbours plus the cell itself. Use it in blockChanged AND in the internal pop path (_check) and fall path (_fall), which today only enqueue y+1. Without this, mining next to a floating gravel ceiling drops one block instead of collapsing the connected patch in a chain as in Minecraft.\n2. Replace hasSupport(id, below) with canSurvive(world, x, y, z, id) in registry.js:\n   - cactus: below is sand or cactus, and none of the 4 horizontal neighbours is solid (or lava);\n   - sugar cane: below is sugar cane, or below is grass/dirt/sand/snowy grass with water or ice horizontally adjacent to the block below.\n3. Use canSurvive in _check and in interaction.js:397 for placement.\n4. Add a Node test: a 5-wide floating gravel strip collapses after one adjacent stone is removed.",
+  "owners": [
+   "world",
+   "lead"
+  ],
+  "status": "fixed",
+  "leadNote": "WORLD (wave 2): 6-neighbour re-checks, canStay, immediate cane re-check when water changes; floating gravel collapses in a chain."
+ },
+ {
+  "dimension": "world",
+  "id": "WORLD-3",
+  "title": "Leaves never decay: chopped trees leave permanent floating canopies, and saplings/apples never drop from decay",
+  "severity": "minor",
+  "files": [
+   "src/world/world.js:55-65 (RANDOM_TICK table has no leaves)",
+   "src/world/world.js:1044-1052 (_randomTick)"
+  ],
+  "evidence": "Seed 42, creative mode: I removed the 7 logs of the spruce at (16,84,-3) with setBlock and ran world.tick() 6000 times (5 minutes of game time). The leaves in the 9×25×9 box went from 95 to 95. Screenshot tools/out/qa/leaves-no-decay.png shows the canopy floating with no trunk. At randomTickSpeed 3, each leaf gets about 4.4 random ticks in 6000 ticks, so in Minecraft about 99 % would have decayed.",
+  "expected": "As in Minecraft's LeavesBlock: leaves more than 6 steps (through leaves or logs) from any log decay on random ticks. They drop their loot through getDrops: 5 % sapling, 0.5 % apple for oak. This is the main source of saplings and early apples. Leaves placed by the player do not decay.",
+  "actual": "Every tree the player chops leaves a canopy floating forever. Saplings and apples come only from breaking leaves by hand.",
+  "suggestedFix": "- Add a T_LEAVES random-tick handler: run a bounded BFS (at most 6 steps, through leaves and logs) looking for a log. If none is found, setBlock(air) and drop getDrops(id, 0, rng) through onDropItem.\n- So that player builds don't decay without block states: append hidden 'persistent' leaf variants (e.g. oak_leaves_persistent, item = oak_leaves) that getPlacementBlock returns when the player places leaves, and that the decay handler skips.",
+  "verdict": "confirmed",
+  "verifyReasoning": "world.js RANDOM_TICK (lines 55-65) has entries only for grass, saplings, cane/cactus and ice. No other code removes leaves.\n\nReproduced with tools/out/vw/leaves.mjs on seed 42, creative: the tree at (16,84,-3) had its 7 logs removed, then 6000 world.tick() calls ran (ticksRun 6000). The leaves in the box went from 95 to 95. I viewed qa/leaves-no-decay.png: it shows a trunkless spruce canopy floating in the air.\n\nLeaf decay is not part of SPEC-wave2 (its random-tick additions are only wheat and farmland), so this is not out-of-scope future work. It is a very visible Minecraft-fidelity gap every time a tree is chopped. Minor is appropriate.",
+  "refinedFix": "1. Leaves need a persistence marker without block states. Append hidden 'persistent' leaf ids (same textures, tint and drops; itemForBlock maps them to the normal leaves). getPlacementBlock returns them for player placement, and decay skips them.\n2. Avoid a BFS on every random tick of every leaf. Keep a per-world 'decay candidates' set, like the pre-1.14 check_decay bit. When a log or leaf becomes air, flood through adjacent non-persistent leaves up to 6 steps and add them.\n3. Random ticks (or a budgeted queue with random delays) check only the candidates. Use a bounded BFS: up to 6 steps through leaves, logs count as found. If no log is found, setBlock(air) and drop getDrops(id, 0, rng) through onDropItem. Otherwise remove the leaf from the set.\n4. Before enabling, add a Node test over several seeds that every generated leaf is within 6 steps of a log, so natural trees, especially overlapping canopies, do not decay spontaneously.",
+  "owners": [
+   "world"
+  ],
+  "status": "fixed",
+  "leadNote": "Same as SURV-2."
+ },
+ {
+  "dimension": "world",
+  "id": "WORLD-4",
+  "title": "Teleporting or lowering the render distance with many modified chunks causes a 40–140 ms frame hitch: every unloaded chunk is RLE-encoded in the same frame",
+  "severity": "minor",
+  "files": [
+   "src/world/world.js:240 (update calls _flushUnloadSaves(false))",
+   "src/world/world.js:586-603 (_unload)",
+   "src/world/world.js:997-1025 (_flushUnloadSaves takes all [..._unloadSaves.values()])",
+   "src/world/storage.js:533-542 (saveChunks encodes every record synchronously)"
+  ],
+  "evidence": "tools/out/qa/unloadspike.mjs, persistent world: one setBlock in every loaded chunk, then a 5000-block teleport.\n- rd 8, 308 modified chunks: one storage.saveChunks call with 308 chunks took 41.1 ms. Frame interval max was 65.5 ms and world.update max 46.7 ms.\n- rd 16, 1007 modified chunks: one call took 92.9–105.6 ms, with frames of 123.6–143.1 ms.\n- For comparison, an autosave of the same 1007 chunks through _saveAll (16 per transaction, yielding in between) took 221 ms in total with a max frame of 20.4 ms.",
+  "expected": "No long frames (SPEC §11). Background unload saves should be batched across frames like save().",
+  "actual": "The frame that unloads the chunks encodes all of them synchronously. The same code path runs on a render-distance decrease or a far respawn.",
+  "suggestedFix": "In the background path (wait = false), write at most about 16 entries, or about 2 ms worth, per frame. Leave the rest in _unloadSaves; _startLoads still finds them. Alternatively, do the RLE encoding in a worker. The full flush for save()/destroy() should also use the batching that _saveAll already uses.",
+  "verdict": "confirmed",
+  "verifyReasoning": "The code proves it. world.update (world.js:240) calls _flushUnloadSaves(false), which passes ALL _unloadSaves entries to one storage.saveChunks. saveChunks (storage.js:533-542) RLE-encodes every chunk synchronously.\n\nReproduced with qa/unloadspike.mjs:\n- rd 8, 308 modified chunks: one 42.6 ms call; frame max 64.6 ms; world.update max 45.5 ms.\n- rd 16, 1007 modified chunks: one 96.2 ms call; frame max 143.8 ms; world.update max 107.3 ms.\n- An autosave of 1007 chunks through _saveAll took 153 ms in total with a max frame of 17.3 ms.\n\nThe 1007-chunk case is contrived, because autosave clears modified flags every 30 s. Random ticks alone modified about 34 chunks in 1200 ticks in my run. A realistic trigger still shows the hitch (tools/out/vw/fillspike.mjs): one maximal /fill of 181x181 at y=200 (156 chunks), then /tp 5000 blocks, gives one 17.9 ms encode call and a 41.4 ms frame. The same teleport without the fill (tools/out/vw/tpbase.mjs) gives a 19.6 ms frame max.\n\nThis is a real but one-off hitch. Minor is appropriate.",
+  "refinedFix": "1. In _flushUnloadSaves(false), take entries in insertion order until about 16 chunks or about 2 ms of encode time (check performance.now() between encodes), and write only those. Leave the rest in _unloadSaves; _startLoads already reuses them, and the next frame continues once _unloadWrite clears.\n2. Make the wait=true path (save/destroy) loop over the same batches, yielding between transactions as _saveAll does.\n3. Better: move rleEncode into the worker pool (post a copy of the blocks) so the main thread never encodes. The synchronous pagehide save from WORLD-1 is the only place where main-thread encoding is required.",
+  "owners": [
+   "world"
+  ],
+  "status": "fixed",
+  "leadNote": "WORLD: background unload saves write at most 16 chunks per frame."
+ },
+ {
+  "dimension": "world",
+  "id": "WORLD-5",
+  "title": "Storage.open() rejects when access to window.indexedDB throws, so the memory fallback never engages and no world can be created",
+  "severity": "minor",
+  "files": [
+   "src/world/storage.js:457-472 (typeof indexedDB is evaluated outside the try/catch)",
+   "src/main.js:72 (Storage.open() result not guarded)"
+  ],
+  "evidence": "tools/out/qa/noidb2.html simulates a context where the window.indexedDB getter throws SecurityError. Chrome does this for opaque-origin or sandboxed iframes ('access to the Indexed Database API is denied in this context').\nResults:\n- At startup the page reports an uncaught '[pageerror] SecurityError: The operation is insecure.'\n- listWorlds() and createWorld() both reject.\n- Clicking 单人游戏 → 创建新的世界 → 创建 shows '无法创建世界 The operation is insecure.' (tools/out/qa/noidb2-create.png).\nSingleplayer cannot be played at all.",
+  "expected": "The module's own contract says 'Storage.open() never rejects: … falls back to memory with a single console.warn'. The game should still be playable without saving.",
+  "actual": "The fallback is skipped and every world action fails.",
+  "suggestedFix": "Wrap the factory lookup in try/catch:\nlet idb = null; try { idb = options.indexedDB !== undefined ? options.indexedDB : globalThis.indexedDB ?? null; } catch (e) { warnFallback(e); }\nThen fall back to MemoryBackend. Also add a .catch on the storage promise in main.js/Game.",
+  "verdict": "confirmed",
+  "verifyReasoning": "The code defect is real, but the stated trigger environment is wrong.\n\nWhat is wrong: Storage.open (storage.js:457-460) evaluates options.indexedDB / typeof indexedDB outside the try. A throwing window.indexedDB getter therefore rejects Storage.open(), which the module contract says never happens. Game._storageReady (game.js:160) has no catch.\n\nReproduction with my own simulation (tools/out/vw/noidb-ff.html; the indexedDB and localStorage getters throw SecurityError):\n- An uncaught '[pageerror] SecurityError: The operation is insecure.' at startup.\n- listWorlds and createWorld both reject.\n- Even a temporary world fails ('[ui] startWorld failed: SecurityError'), because startWorld awaits _storageReady.\n- The title screen gives no hint (tools/out/vw/noidb-ff-title.png, viewed).\n\nThe reporter's environment claim that Chrome does this for sandboxed or opaque-origin iframes is wrong. My Chromium probe (tools/out/vw/idbprobe.html) shows that window.indexedDB returns an object in a sandboxed srcdoc iframe and in a data: iframe. It is open() that throws synchronously, and openDatabase already catches that, so the memory fallback works (tools/out/vw/noidb-chrome.html gives backend 'memory' and createWorld succeeds). An Edge profile with all site data blocked (tools/out/vw/profile-blocked) also falls back correctly.\n\nThe real trigger is Firefox. MDN's Storage Access Policy says 'attempting to access the IndexedDB factory object throws a SecurityError exception'. Long-standing Firefox reports (Modernizr #1825/#2057, localForage #501) show the same SecurityError when cookies or site data are blocked. main.js explicitly recommends Firefox. The impact in that environment is total (no world can be entered), but the environment is niche, so minor stands.",
+  "refinedFix": "In Storage.open:\n  let idb = null;\n  try { idb = options.indexedDB !== undefined ? options.indexedDB : (globalThis.indexedDB ?? null); }\n  catch (err) { warnFallback(err); return new Storage(new MemoryBackend()); }\nMake the null check use options.indexedDB === null for the silent case.\n\nAlso harden Game: this._storageReady = Promise.resolve(storage).catch((err) => { console.warn('[game] storage unavailable:', err); return Storage.memory(); }).then((s) => (this.storage = s)).\n\nFix the repro note: the trigger is Firefox with cookies/site data blocked, or a third-party tracker context. Chromium sandboxed iframes are already handled.",
+  "owners": [
+   "fixer",
+   "world"
+  ],
+  "status": "fixed",
+  "leadNote": "WORLD + FIXER: a throwing indexedDB getter falls back to memory storage; the game starts with a chat warning."
+ },
+ {
+  "dimension": "world",
+  "id": "WORLD-6",
+  "title": "When IndexedDB cannot be opened, worlds silently live only in memory: 'save & quit' looks normal and the worlds vanish on reload, with no UI warning",
+  "severity": "minor",
+  "files": [
+   "src/world/storage.js:429-471 (warnFallback is only a console.warn)",
+   "src/ui/menus.js, src/game.js (storage.persistent / backend never consulted)"
+  ],
+  "evidence": "tools/out/qa/noidb.html (indexedDB.open fails with UnknownError) with tools/out/qa/noidb-steps.json:\n- Create a world, place a gold block, then 保存并退出. game.storage.backend is 'memory' and persistent is false.\n- The title screen shows no warning (tools/out/qa/noidb-title.png); the only notice is a console.warn.\n- After location.reload(), listWorlds() returns [].\n- `grep -n persistent src/ui src/game.js` finds nothing.\n- navigator.storage.persist() is never requested, so even with working IndexedDB the saves are best-effort and the browser can evict them under storage pressure.",
+  "expected": "The player is told that worlds cannot be saved, as Minecraft does when it cannot write a save.",
+  "actual": "Silent loss of every world created in that session.",
+  "suggestedFix": "- Expose storage.persistent to the UI. When it is false, show a red line on the title, world list and create screens, e.g. '无法保存世界：浏览器禁止了本地存储，退出后世界将丢失', and post a chat warning on entering a world.\n- Call navigator.storage.persist() after the first world is created, so the browser does not evict saved worlds under storage pressure.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced with qa/noidb.html and a copy of the steps that writes the screenshot to tools/out/vw/noidb-title.png:\n- After creating a world, placing a gold block and 保存并退出: backend 'memory', persistent false.\n- The title screen shows only the normal menu (viewed tools/out/vw/noidb-title.png; innerText has no warning). The only notice is a console.warn.\n- After location.reload(), listWorlds() returns [].\n\nIt also happens in a real browser configuration without any simulation. Edge with all site data blocked (tools/out/vw/profile-blocked) silently falls back to memory, and createWorld succeeds with no UI hint.\n\ngrep for persistent / .backend / navigator.storage in src/ui, src/game.js, src/main.js and src/game finds nothing relevant (only an unrelated comment in entities.js). The player loses every world from that session with no warning. Minor is appropriate.",
+  "refinedFix": "1. Expose game.storage.persistent (or backend === 'memory') to the UI.\n2. When it is false:\n   - show a red line on the title, world list and create-world screens, e.g. '无法保存世界：浏览器禁止了本地存储，退出后世界将丢失';\n   - mark the worlds in the list as 不会保存;\n   - post a §c chat warning when entering a world.\n3. Surface save failures too. Autosave and quit failures (e.g. QuotaExceededError or an aborted transaction) currently only go to the console (_logOnce / console.warn in quitToTitle). quitToTitle then destroys the world and drops the unsaved data. Show a chat or message-screen warning, and offer to retry before discarding.\n4. Optionally call navigator.storage.persist() after the first saved world is created; it is best-effort.",
+  "owners": [
+   "fixer",
+   "world",
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "CONTAINERS: red no-storage notice on title / world list / create screens; worlds marked （不会保存）.",
+  "integratorNote": "INTEGRATOR wave 2: chat warning on entering (FIXER) + red notice on the title / world list / create screens and （不会保存） markers (CONTAINERS, ui-title-nostorage.png, ui-worlds-nostorage.png)."
+ },
+ {
+  "dimension": "world",
+  "id": "WORLD-7",
+  "title": "The same world can be open in two tabs at once; the later save overwrites whole chunk records and silently discards the other tab's edits",
+  "severity": "minor",
+  "files": [
+   "src/game.js:474-542 (startWorld has no world lock)",
+   "src/world/storage.js:412-417 (putChunks overwrites whole chunk records)",
+   "src/world/world.js:973-990"
+  ],
+  "evidence": "tools/out/qa/twotabs.mjs:\n- Tab A creates and enters world W. Tab B (window.open) lists W and enters it too; this is allowed.\n- In the same chunk, A sets a gold block at (x+1,200,z) and B sets a diamond block at (x+2,200,z).\n- A.saveWorld(), then B.saveWorld(), then both quit and the world is re-entered.\n- Result: {gold: 0, diamond: 84}. A's edit is gone; no warning is shown in either tab.",
+  "expected": "Like Minecraft's session.lock, a world already in use is refused, or opened read-only, in the second tab.",
+  "actual": "Both tabs write full chunk snapshots and the last writer wins.",
+  "suggestedFix": "In startWorld, request navigator.locks.request('webcraft-world-' + meta.id, {ifAvailable: true}, cb). Hold the lock with a promise that is resolved in quitToTitle. If the lock is not granted, show '该世界已在另一个标签页中打开' instead of loading. A BroadcastChannel ping can serve as a fallback.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced with qa/twotabs.mjs through harness-qa.mjs: {okTitle: true, okB: true, gold: 0, diamond: 84}.\n\nTab B could list and enter the world that tab A was already playing. Both tabs edited the same chunk; A saved first, then B. After re-entering, A's gold block was gone and there was no warning in either tab.\n\nThe code agrees: startWorld (game.js:474-542) has no lock, and putChunks (storage.js:412-417) stores whole-chunk RLE records, so the last writer wins. putWorld overwrites the whole meta the same way (inventory and position). Duplicating a tab is a common user action. Minor is appropriate.",
+  "refinedFix": "1. In startWorld, before loading, call navigator.locks.request('webcraft-world-' + meta.id, {ifAvailable: true}, (lock) => { if (!lock) return null; return new Promise((release) => { this._worldLockRelease = release; }); }).\n2. If the callback gets null, reject with '该世界已在另一个标签页中打开' and show it via the existing showMessage path.\n3. Call _worldLockRelease() at the end of quitToTitle and in _abortLoading. The browser releases the lock automatically when the page unloads.\n4. navigator.locks exists only in secure contexts. 127.0.0.1 qualifies, but a plain-http LAN IP does not. Fall back there to a BroadcastChannel('webcraft-worlds') ping/pong (or a localStorage heartbeat) to detect a world that is open elsewhere.\n5. Optionally grey out such worlds in the world list.",
+  "owners": [
+   "fixer",
+   "world"
+  ],
+  "status": "fixed",
+  "leadNote": "Same as CODE-3 (+ storage.acquireWorldLock by WORLD)."
+ },
+ {
+  "dimension": "survival",
+  "id": "SURV-3",
+  "title": "Floating-point rounding in getBreakTime adds a tick: coal ore with a wooden pickaxe takes 2.30 s instead of Minecraft's 2.25 s (17 tool/block combinations affected)",
+  "severity": "minor",
+  "files": [
+   "src/world/registry.js:258-260 (perTick = speed / hardness / 30; return Math.ceil(1 / perTick) / 20)"
+  ],
+  "repro": "node -e \"import('./src/world/registry.js').then(R => console.log(R.getBreakTime(R.BLOCK.COAL_ORE, R.ITEM.WOODEN_PICKAXE)))\" prints 2.3. In game, mine coal ore with a wooden pickaxe (tools/out/qa/p-wood.json, cave phase).",
+  "evidence": "2/3/30 = 0.0222..., and 1/0.0222... = 45.00000000000001, which Math.ceil turns into 46 ticks. Checking every block against every tool (integer-exact ceil(hardness*30/speed)) finds 17 combinations one tick too slow: coal_ore + wooden_pickaxe, and bookshelf by hand or with any non-axe tool (2.30 s instead of 2.25 s). Live timings with real left-click holds, from mousedown to the blockChanged event: coal (4,59,8) 2313 ms and coal (3,60,8) 2297 ms. With the same setup, stone (exactly 1.15 s) measured 1135-1157 ms, so the measurement is accurate enough to separate 45 from 46 ticks. All other measured times were correct: oak log by hand 3.0 s, stone with a wooden pickaxe 1.15 s, iron with a wooden pickaxe 7.5 s (no drop), iron with a stone pickaxe 1.15 s, crafting table 3.75 s.",
+  "expected": "Coal ore with a wooden pickaxe takes 45 ticks (2.25 s), the value from the Minecraft wiki formula and the game's own per-tick accumulation; bookshelf takes 2.25 s.",
+  "actual": "46 ticks (2.30 s), so the most common early-game ore/tool pair is slightly slow.",
+  "suggestedFix": "Use an epsilon or integer arithmetic: return Math.ceil(1 / perTick - 1e-9) / 20, or ticks = Math.ceil(hardness * (harvest ? 30 : 100) / speed - 1e-9). Add a registry unit test asserting coal_ore + wooden_pickaxe = 2.25 and bookshelf = 2.25.",
+  "verdict": "confirmed",
+  "verifyReasoning": "registry.js:257-259 computes perTick = speed / hardness / div and returns Math.ceil(1 / perTick) / 20. In node, getBreakTime(COAL_ORE, WOODEN_PICKAXE) = 2.3 and getBreakTime(BOOKSHELF, hand) = 2.3, because 1/(2/3/30) = 45.00000000000001 and ceil gives 46.\n\nI checked every non-hidden block against hand and all tools with exact integer arithmetic. Exactly 17 combinations come out one tick slow: coal_ore + wooden_pickaxe, and bookshelf with hand or any non-axe tool.\n\nSimulating Minecraft's own float accumulation (Math.fround per op, destroyProgress >= 1.0F) also gives 45 ticks for both, so the expected 2.25 s is right by the wiki formula and by vanilla behaviour.\n\ninteraction.js uses this value directly (b.progress += dt / time), so the in-game break takes at least 2.3 s. The effect is small (one tick, about 2%) but it is a real correctness bug in a shared helper. Minor is appropriate.",
+  "refinedFix": "Use `const ticks = Math.ceil(1 / perTick - 1e-9); return ticks / 20;`. Alternatively use exact rationals, ticks = ceil(hardness * div / speed) on values scaled to integers, with the water/air /5 factors folded into the divisor. Add registry tests: coal_ore + wooden_pickaxe = 2.25, bookshelf by hand = 2.25, stone + wooden_pickaxe = 1.15, oak_log by hand = 3.0.",
+  "owners": [
+   "lead"
+  ],
+  "status": "fixed",
+  "leadNote": "Lead: registry.getBreakTime epsilon; verified against exact arithmetic for all 8944 block x tool x penalty combos."
+ },
+ {
+  "dimension": "survival",
+  "id": "AUDIO-2",
+  "title": "Blocks that pop off after losing support (torch, flowers, sugar cane, cactus) disappear without a break sound or particles",
+  "severity": "minor",
+  "files": [
+   "src/world/blockupdates.js:121-128 (_check only sets AIR and drops the loot)",
+   "src/game.js:503-504 (onDropItem only calls entities.popItem; no audio or particles)"
+  ],
+  "repro": "node tools/harness.mjs --url \"index.html?autostart=1&seed=42&mode=survival\" --wait-for window.__ready --steps tools/out/qa/p-torch3.json. Steps: tp to (6.5,58,8.5), give a torch and a stone pickaxe, place the torch on top of stone (5,58,8) with a real right-click, then mine (5,58,8) with a real left-click hold.",
+  "evidence": "Audio spy after the support broke: ['playBlock(break,stone,5.5,58.5,8.5)', 'play(pop,...)' for the pickup]. The torch cell becomes air and a torch item appears (ents: ['torchx1','cobblestonex1']), but there is no playBlock('break','wood',...) for the torch and no spawnBlockBreak call. The code confirms that support pops never reach audio or particles.",
+  "expected": "In Minecraft, Block.updateOrDestroy calls Level.destroyBlock, which fires levelEvent 2001. That plays the popped block's break sound (volume (v+1)/2, pitch 0.8) and shows its break particles, so a torch audibly pops when the block under it is mined.",
+  "actual": "Popped torches, flowers, sugar-cane and cactus stacks vanish silently with no particles.",
+  "suggestedFix": "Give BlockUpdater an onBlockPopped(id, x, y, z) hook, called in _check before setting AIR and also when a falling block breaks on landing. Wire it in World/game.js to audio.playBlock('break', BLOCKS[id].sound, x+0.5, y+0.5, z+0.5) and particles.spawnBlockBreak(x, y, z, id).",
+  "verdict": "confirmed",
+  "verifyReasoning": "Code: BlockUpdater._check (blockupdates.js:121-128) only does setBlock(AIR, {update:false}) and getDrops -> onDropItem. game.js:504 wires onDropItem to entities.popItem, which only spawns item entities (entities.js:951-964); there is no audio or particle call.\n\nRepro (tools/out/vsurv/pop1.json): I placed a torch on stone (5,58,8) with a real right-click, so the torch cell (5,59,8) became 'torch'. I then hooked audio.playBlock/play and particles.spawnBlockBreak and called interaction.breakBlock(5,58,8). The torch cell became air and a torch item (46x1) appeared. The only effects recorded were spawnBlockBreak(5,58,8,1) and playBlock('break','stone',...) for the stone, plus a later 'pop' pickup. Nothing was recorded for the torch.\n\nIn Minecraft, a support loss goes through Block.updateOrDestroy / scheduled tick -> Level.destroyBlock, which fires levelEvent 2001: the break sound at (v+1)/2 volume and pitch 0.8, plus destroy particles. A popped torch, flower, cane or cactus is audible and visible there. Minor fidelity gap.",
+  "refinedFix": "1. Add an onBlockPopped(id, x, y, z) option to BlockUpdater. Call it in _check right after the successful setBlock(AIR) on support loss, before the drops.\n2. Do not add it to the falling-block landing path: vanilla FallingBlockEntity only drops the item there, with no 2001 event.\n3. World forwards the hook like onDropItem. game.js wires it to particles.spawnBlockBreak(x, y, z, id) and audio.playBlock('break', BLOCKS[id].sound, x+0.5, y+0.5, z+0.5); the 'break' kind already uses Minecraft's (v+1)/2 volume and 0.8 pitch.\n4. Reuse the same hook for leaf decay (SURV-2). SoundCore's spam guard (3 identical sounds per 35 ms) is acceptable for tall cane or cactus cascades.",
+  "owners": [
+   "fixer",
+   "world"
+  ],
+  "status": "fixed",
+  "leadNote": "WORLD onBlockPopped hook + FIXER wiring to break particles and sound."
+ },
+ {
+  "dimension": "survival",
+  "id": "SURV-4",
+  "title": "Unlit caves render almost pure black because the light floor is 0.035, so ore and cave layout cannot be seen without torches",
+  "severity": "minor",
+  "files": [
+   "src/render/shaders.js:70-74 (lightColor: max(max(s, b), vec3(0.035)); the entity renderer's copy too)",
+   "docs/SPEC.md §9.3 (sets the 0.035 floor; the options screen has no brightness setting)"
+  ],
+  "repro": "Autostart with seed 42 in survival, debug.tp(6.5,58,8.5) into the unlit tunnel under spawn, and take a screenshot (tools/out/qa/p4-a-cave.png, p4-b-mined.png, p6-a-stone-pickaxe.png).",
+  "evidence": "Luminance of the 3D view (rows 0-580) in the unlit-cave screenshots: median 2-3/255 and 95th percentile 3-5, so only the HUD is visible. The same tunnel lit by one torch (p10-b-wall-torch-refused-lit.png) has median 23. Expected light-0 values below are my reconstruction of Minecraft's LightTexture from memory, not checked against the source here: light 0 goes to 0.03 ambient, then gamma interpolation gives about 0.059 on 'Moody', about 0.10 at the default 50% brightness, and about 0.14 on 'Bright'. Minecraft also has a brightness slider. Note that the 0.035 floor follows the spec, and this overlaps with the renderer's area.",
+  "expected": "Unlit cave surfaces should stay faintly visible at default settings (about 6-10% brightness), so players can find nearby coal or iron and the cave shape before they have torches, with a brightness option to adjust it.",
+  "actual": "Stone in an unlit cave renders at about 1% brightness. The cave and the ores in it are invisible, and there is no brightness option.",
+  "suggestedFix": "Raise the ambient floor in lightColor (shaders.js and entityrenderer.js) to about 0.06-0.10, or implement Minecraft's gamma curve (lerp toward 1-(1-x)^4 by a 'brightness' setting, default 0.5) and add 亮度 to the options screen and DEFAULT_SETTINGS. Update SPEC §9.3 to match.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Code: GLSL_LIGHT in shaders.js:70-74 ends with max(max(s,b), vec3(0.035)), and the terrain fragment writes albedo*light*shade straight to the framebuffer. There is no brightness setting in DEFAULT_SETTINGS or the UI. entityrenderer.js imports the same GLSL_LIGHT rather than keeping a copy, so there is a single definition.\n\nMeasured: in my unlit-cave screenshots (tools/out/vsurv/torch1-wall.png, cave-orig.png) the 3D-view luminance has median 2/255 and p95 3/255. The reporter's p4/p6 shots measure 2-3 and 3-5.\n\nExperiment: in a private copy I changed only the floor to 0.0995. The same view (tools/out/vsurv/cave-floor0995-experiment.png) gives median 6, p95 10, and the tunnel walls, floor and coal-ore spots become discernible. In the original they are effectively black.\n\nMinecraft reference: the lightmap (LightTexture in 1.19-1.21.1: lerp to 0.75 by 0.04, notGamma = 1-(1-x)^4 mixed in by the Brightness option, default 0.5, then lerp 0.04 again; the current lightmap.fsh still mixes notGamma by BrightnessFactor) gives about 0.059 (Moody), 0.0995 (default) and 0.14 (Bright) at light 0. That is 1.7-2.8x the game's 0.035, and Minecraft has a brightness slider.\n\nThe 0.035 value is what the spec says, but it looks like a mis-derivation of Minecraft's 0.03 ambient without the gamma step. It is a real, noticeable fidelity gap for caves. Minor is appropriate; the fix needs a SPEC §9.3 change.",
+  "refinedFix": "Edit GLSL_LIGHT once in shaders.js; entityrenderer.js imports it, so terrain, entities, particles and the hand all follow.\n\nDo not just raise the max() floor. A 0.10 floor flattens block-light levels 0-4 (lightCurve(4/15) = 0.083) and night sky light up to level 12 (0.2 x curve) into one value, which cuts off torch falloff and night shading.\n\nFaithful option: after combining, apply Minecraft's lightmap post-steps:\n`c = mix(c, vec3(0.75), 0.04); c = mix(c, 1.0 - pow(1.0 - c, vec3(4.0)), uBrightness); c = mix(c, vec3(0.75), 0.04);`\nAdd a `brightness` setting to DEFAULT_SETTINGS (default 0.5; 0 = 昏暗, 1 = 明亮) and a 亮度 slider on the options screen, passed as a uniform. Light 0 then gives about 0.059 / 0.0995 / 0.14.\n\nMinimal option: `c = ambient + (1.0 - ambient) * max(s, b)` with ambient around 0.06-0.10, which keeps the levels distinct.\n\nUpdate SPEC §9.3 to match.",
+  "owners": [
+   "fixer"
+  ],
+  "status": "fixed",
+  "leadNote": "FIXER: Minecraft lightmap curve (unlit 0.0995); cave median luminance 2 -> 7, noon unchanged."
+ },
+ {
+  "dimension": "render",
+  "id": "RENDER-2",
+  "title": "Cactus side faces are clipped to 14 px, so the spine texels in texture columns 0/15 are never drawn (no protruding spines as in Minecraft)",
+  "severity": "minor",
+  "files": [
+   "src/world/mesher.js:414-420 (meshCactus: side faces use boxFace(f, ..., 1,0,1, 15,16,15), i.e. texels 1..15)",
+   "src/render/textures.js:1686-1695 (cactus_side: 'columns 0/15 only carry spines', spines at [0,4],[15,9],[0,13],[15,1])"
+  ],
+  "evidence": "tools/out/rq/cactus-orig.png (current build, FOV 30 close-up): the silhouette is perfectly straight and no spine sticks out. tools/out/rq/cactus-patched.png is a throwaway snapshot edit (since reverted, checked with cmp) where the side faces span 0..16 along the face while staying inset 1/16 along the normal. There the edge spines stick out exactly like Minecraft's cactus. The texture was authored for this layout: columns 0 and 15 contain only spine pixels, but the mesher's planar UVs (texels 1..15) never sample them.",
+  "expected": "Minecraft's cactus model: the side elements are inset 1 px along their normal (from [0,0,1] to [16,16,15], and [1,0,0] to [15,16,16]) but use the full 0..16 width and UV 0..16. The transparent border texels then let the spines overhang the corners.",
+  "actual": "Sides are 14 px wide with UV 1..15, so 4 of the 12 spine pixels per face are never drawn and the cactus loses its spiky silhouette.",
+  "suggestedFix": "In meshCactus, emit the ±X faces with boxFace(f, bx,by,bz, 1,0,0, 15,16,16, ...) and the ±Z faces with boxFace(f, bx,by,bz, 0,0,1, 16,16,15, ...). That is the full 16-px width with texels 0..16; the cutout alpha discards the empty border. Update the mesher header comment and SPEC §7 ('sides inset by 1/16, full width').",
+  "repro": "index.html?autostart=1&seed=42&mode=creative&type=flat; place sand at (20,3,10) and cactus at (20,4,10) and (20,5,10); view from about 3 blocks away at a diagonal (tools/out/rq/cactus2.json).",
+  "verdict": "confirmed",
+  "verifyReasoning": "The vanilla model, fetched from misode/mcmeta, has the north/south element from [0,0,1] to [16,16,15] and the west/east element from [1,0,0] to [15,16,16], both with uv [0,0,16,16]. Sides are inset 1 px along the normal but span the full width.\n\nmeshCactus (mesher.js:414-420) uses boxFace(...,1,0,1,15,16,15) for all four sides, so u runs 1..15. The four edge spine texels in cactus_side columns 0/15 (textures.js:1694, [0,4],[15,9],[0,13],[15,1]) are never sampled. The two modules' notes also contradict each other: docs/notes/textures.md:62-64 says those spines 'poke out of the silhouette like in Minecraft', while docs/notes/mesher.md:85 deliberately clips them.\n\nReproduced: tools/out/vrender/r2-orig-cactus-front.png has a perfectly straight silhouette. I applied the exact suggested boxFace change in a private copy of the snapshot (the snapshot's mesher.js is untouched). Spines then protrude as in Minecraft (r2-patched-cactus-front.png, r2-patched-cactus-diag.png), with no z-fighting or lighting artifacts. Minor fidelity issue; the suggested fix is correct.",
+  "refinedFix": "Apply the suggested change in meshCactus:\n  if (f < 2) boxFace(f, bx,by,bz, 1,0,0, 15,16,16, 0,0,0);\n  else boxFace(f, bx,by,bz, 0,0,1, 16,16,15, 0,0,0);\nThis is verified to render correctly. Also update:\n- tests/mesher.test.js:412-431, which asserts u range [1,15] for every cactus quad. Sides become [0,16]; the top stays [1,15].\n- The mesher.js header (line 33), docs/notes/mesher.md item 3, and SPEC §7 wording.\nOptionally, give the entity cactus model (buildCactusModel) the same spines for held and dropped cactus.",
+  "owners": [
+   "world",
+   "art"
+  ],
+  "status": "fixed",
+  "leadNote": "Wave-2 INTEGRATOR: cactus side faces full width, spines overhang.",
+  "integratorNote": "INTEGRATOR wave 2: meshCactus sides use Minecraft model elements ([1,0,0]-[15,16,16] and [0,0,1]-[16,16,15], texels 0..16) so the edge spines overhang; test updated (tests/mesher.test.js)."
+ },
+ {
+  "dimension": "render",
+  "id": "RENDER-3",
+  "title": "Break-crack overlay is masked to the opaque texels of cutout blocks, so mining glass shows almost no cracks (and leaves only partial ones)",
+  "severity": "minor",
+  "files": [
+   "src/render/shaders.js:244,261 (CRACK_FS: if (uAlphaTest > 0.5 && baseAlpha < 0.5) discard)",
+   "src/render/renderer.js:1449-1452 (_drawCrack sets uAlphaTest = 1 for layer 1 / cutout)"
+  ],
+  "evidence": "tools/out/rq/crk3-glass-7-actual.png: glass at destroy stage 7. Only a few frame pixels darken and the clear area shows nothing, so mining progress is barely visible (same in crack-glass-7.png; leaves in crack-leaves-7.png and crk-leaves-9.png only crack on leaf texels). tools/out/rq/crk3-glass-7-unmasked.png is the same frame with uAlphaTest forced to 0 at runtime: the full crack pattern covers the face, which is how Minecraft shows it.",
+  "expected": "Minecraft draws the crumbling texture over the block model's quads without sampling the block texture's alpha, so cracks cover the whole face of glass and leaves (including the clear areas) and break progress is easy to read.",
+  "actual": "Cracks only appear where the base cutout texture is opaque. On glass that is a thin frame, so most of the 10 stages look the same.",
+  "suggestedFix": "Do not alpha-test against the base texture in the crack pass: set uAlphaTest = 0 for every layer, or drop the test. The cell test (floor(vQ - vNormal*0.5) == uCrackCell) already limits cracks to the block's own quads, and polygon offset plus the DST_COLOR/SRC_COLOR blend work unchanged.",
+  "repro": "flat creative world; place glass; use tools/out/rq/crack.js rq.forceBreak(x,y,z,7) (or hold left click in survival) and look at the block from 2.6 blocks away.",
+  "verdict": "confirmed",
+  "verifyReasoning": "CRACK_FS discards where baseAlpha < 0.5 when uAlphaTest > 0.5 (shaders.js:244,261), and _drawCrack sets uAlphaTest = 1 for layer 1, the cutout layer (renderer.js:1451).\n\nReproduced with glass at stage 7 in tools/out/vrender/: r3-glass-none.png, r3-glass-7.png, r3-glass-7-unmasked.png. With the mask, the cracks only speckle the frame and shine texels, and the clear area shows nothing. With uAlphaTest forced to 0 at runtime, the full crack pattern covers every face. Pixel diffs against the uncracked frame: 3.0% masked vs 9.7% unmasked; stone at stage 7 gives 7.8%.\n\nIn vanilla, the crumbling render type samples only the destroy_stage texture over the model quads (SheetedDecalTextureGenerator), so glass and leaves crack across the full face. The mask is a documented choice in renderer.md ('Transparent texels of cutout textures are skipped'), but it is not Minecraft-faithful and makes glass progress almost unreadable.\n\nPractical impact is low: glass breaks in about 0.45 s by hand, and leaves look similar either way (r3-leaves-7*.png). Minor is right.",
+  "refinedFix": "The suggested fix is correct. Set uAlphaTest to 0 for every layer, or remove the uniform and the discard. The cell test floor(vQ - vNormal*0.5) == uCrackCell already confines cracks to the block's own quads, including cross plants (face 6, normal 0) and inset cactus faces. Update the 'Transparent texels of cutout textures are skipped' sentence in docs/notes/renderer.md. No test pins uAlphaTest.",
+  "owners": [
+   "fixer"
+  ],
+  "status": "fixed",
+  "leadNote": "Wave-2 INTEGRATOR: crack overlay no longer masked by cutout alpha.",
+  "integratorNote": "INTEGRATOR wave 2: CRACK_FS no longer discards on the block texture alpha (uAlphaTest removed); the cell test alone confines cracks, so glass and leaves crack over their whole faces like Minecraft crumbling."
+ },
+ {
+  "dimension": "render",
+  "id": "RENDER-4",
+  "title": "Crafting table front texture is on north+south instead of north+west as in Minecraft",
+  "severity": "minor",
+  "files": [
+   "src/world/blocks.js:176-178"
+  ],
+  "evidence": "Block definition: px: 'crafting_table_side', nx: 'crafting_table_side', pz: 'crafting_table_front', nz: 'crafting_table_front'. Resolved FACE_LAYERS (registry dump): +X east=crafting_table_side, -X west=crafting_table_side, +Z south=crafting_table_front, -Z north=crafting_table_front. Screenshots: tools/out/rq/fac-crafting-nw.png and fac-crafting-se.png both show one front and one side face; in Minecraft the NW view shows two fronts and the SE view two sides.",
+  "expected": "Minecraft block/crafting_table.json: north = crafting_table_front, west = crafting_table_front, south = crafting_table_side, east = crafting_table_side, up = crafting_table_top, down = oak_planks.",
+  "actual": "The south face shows the front texture and the west face shows the side texture.",
+  "suggestedFix": "Change the texture map to { px: 'crafting_table_side', nx: 'crafting_table_front', py: 'crafting_table_top', ny: 'oak_planks', pz: 'crafting_table_side', nz: 'crafting_table_front' }.",
+  "repro": "Place a crafting table and walk around it, or run tools/out/rq/bed.js rq.bed() and view x=18, z=3 from the NW and the SE.",
+  "verdict": "confirmed",
+  "verifyReasoning": "The vanilla assets (misode/mcmeta, models/block/crafting_table.json) have north = crafting_table_front, west = crafting_table_front, south = crafting_table_side, east = crafting_table_side, up = crafting_table_top, down = oak_planks.\n\nblocks.js:176-178 maps px (east) = side, nx (west) = side, pz (south) = front, nz (north) = front, so the west and south textures are swapped. The reporter's fac-crafting-nw.png and fac-crafting-se.png both show one front and one side face. Minecraft would show two fronts from the NW and two sides from the SE. Minor, one-line data fix.",
+  "refinedFix": "Use the suggested map: { px: 'crafting_table_side', nx: 'crafting_table_front', py: 'crafting_table_top', ny: 'oak_planks', pz: 'crafting_table_side', nz: 'crafting_table_front' }.\n\nSide effect: IconFactory draws the south (left) and east (right) faces from FACE_LAYERS (textures.js:2741, 2861). After this change the crafting table's inventory icon would show only side textures. Check that this is acceptable, or render that icon from a corner that shows a front face.",
+  "owners": [
+   "lead"
+  ],
+  "status": "fixed",
+  "leadNote": "Lead: crafting table front texture on north + west, side on south + east (Minecraft model)."
+ },
+ {
+  "dimension": "render",
+  "id": "RENDER-5",
+  "title": "Lighting matches Minecraft's 0% 'Moody' curve with no block-light boost or brightness option; torch-lit caves, interiors, shade and night are about 1.8-4x darker than Minecraft's default",
+  "severity": "minor",
+  "files": [
+   "src/render/shaders.js:69-76 (GLSL_LIGHT lightCurve l/(4-3l), no gamma)",
+   "src/render/renderer.js:331-336 (computeSkyTint: only the night sky is compensated)",
+   "src/config.js:79-91 (DEFAULT_SETTINGS has no brightness option)"
+  ],
+  "evidence": "WebCraft's terrain light is lightCurve(level/15) used directly, with block light × (1, 0.92, 0.82). By block-light level 4/7/10/14 that gives red ≈ 0.08/0.18/0.33/0.78. Minecraft's lightmap at its default 50% brightness (LightTexture: block brightness × ~1.5, then lerp(x, 1-(1-x)^4, 0.5) and a 0.04 lerp to 0.75) gives about 0.33/0.52/0.73/0.99. Sky light 10 at noon (overhangs, under trees): WebCraft 0.33 vs Minecraft ≈0.59. Midnight sky light: WebCraft (0.17,0.18,0.27) vs Minecraft ≈(0.31,0.31,0.49). Screenshots: tools/out/rq/cave-torch-1.png (torch-lit cave wall mostly near-black) and room-night-a.png (glowstone room: the walls a few blocks away are almost black). renderer.md:88-90 notes that Minecraft's gamma curve is missing and compensates only the night sky tint.",
+  "expected": "Torch-lit and shaded areas about as bright as Minecraft's default brightness, or at least a brightness setting (Moody..Bright) like Minecraft's options.",
+  "actual": "Everything not in full sky light or right next to a light source is much darker than Minecraft's default look. Caves lit by a single torch are hard to read.",
+  "suggestedFix": "Apply Minecraft's lightmap transfer in lightColor() (shared GLSL_LIGHT, so terrain and entities stay identical): block term = min(1, 1.5*curve(blk)); then c = mix(c, 1-(1-c)^4, uBrightness); add uBrightness to FrameUniforms with a default of 0.5; add a 'brightness' slider to DEFAULT_SETTINGS and the options screen. Remove the ad-hoc night tint boost afterwards. This changes the SPEC's canonical formula (§9.3), so update SPEC too.",
+  "repro": "Any default world: go into a cave and place one torch, or build a closed room lit by one glowstone and view at night (tools/out/rq/room.js, room1.json). Compare to Minecraft at the default brightness.",
+  "verdict": "confirmed",
+  "verifyReasoning": "The analysis is correct. GLSL_LIGHT (shaders.js:69-76) is the SPEC §9.3 canonical formula verbatim, and tests/renderer.test.js:43-45 pin it, so this is a SPEC-level fidelity gap, not an implementation slip. It needs the SPEC owner's sign-off.\n\nThe numbers match Minecraft's lightmap: block light multiplied by (1.5 + flicker) with the warm ramp, sky added (not max), the 0.96x+0.03 lerps, and a mix with 1-(1-c)^4 by the brightness option. The current lightmap.fsh from misode/mcmeta confirms the get_brightness curve, BlockFactor, additive sky/block and the notGamma mix. The default brightness has been 50% since 1.18 (21w39a, minecraft.wiki Options page).\n- Block light 4/7/10/14: about 0.33/0.52/0.73/0.99 in MC vs 0.083/0.18/0.33/0.78 in WebCraft.\n- Sky light 10 at noon: 0.59 vs 0.33.\n- Midnight sky: (0.32,0.32,0.49) vs (0.17,0.18,0.27).\nSky light roughly matches MC's old Moody default. Block light is darker even than Moody (about 1.5-1.8x), because the 1.5 factor is missing.\n\nVisual check: a sealed 15x15 room with one torch. The current build (tools/out/vrender/r5-room-torch-orig.png) has walls 4-8 blocks away near-black. With a runtime shader swap emulating MC's lightmap (tools/out/vrender/mclight.js), the room is readable at both 50% (r5-room-torch-mc50.png) and 0% (r5-room-torch-mc0.png). Minor severity is fair.",
+  "refinedFix": "Treat this as a SPEC §9.3 change. Implement Minecraft's lightmap in GLSL_LIGHT (tested in-page via tools/out/vrender/mclight.js):\n  b = curve(blk) * 1.5;\n  c = vec3(b, b*((b*0.6+0.4)*0.6+0.4), b*(b*b*0.6+0.4))\n    + mix(vec3(daylight, daylight, 1.0), vec3(1.0), 0.35) * curve(sky) * (daylight*0.95+0.05);\n  c = clamp(mix(c, vec3(0.75), 0.04), 0.0, 1.0);\n  c = mix(c, 1.0 - pow(1.0 - c, vec3(4.0)), brightness);\n  c = clamp(mix(c, vec3(0.75), 0.04), 0.0, 1.0);\nAdd brightness (default 0.5; Moody = 0, Bright = 1) to DEFAULT_SETTINGS and the options screen.\n\nentityrenderer.js pastes GLSL_LIGHT in two programs (lines 680, 742) and calls lightColor() with its own uDaylight/uSkyTint uniforms. Brightness must reach those programs too, either as a uniform set by both renderers or as a constant baked into the source with programs rebuilt on change. Otherwise entities and the hand will no longer match the terrain.\n\nThen drop NIGHT_SKY_TINT and update tests/renderer.test.js:43-45. If a full change is not accepted, adding the 1.5x block-light factor alone closes most of the torch and cave gap.",
+  "owners": [
+   "fixer",
+   "lead"
+  ],
+  "status": "fixed",
+  "leadNote": "FIXER light curve + wave-2 INTEGRATOR 亮度 slider (settings.brightness 0..1, Minecraft Moody/default/Bright).",
+  "integratorNote": "INTEGRATOR wave 2: FIXER applied the Minecraft lightmap curve (SURV-4); the remaining brightness option is added: settings.brightness 0..1 (default 0.5) -> FrameState.brightness -> skyTint.a in the frame UBO and the entity renderer uniforms -> GLSL_LIGHT mixes notGamma by it (light 0 = 0.059 Moody / 0.0995 default / 0.14 Bright, tested). Options screen: 亮度 slider (昏暗 .. 默认 .. 明亮) next to 难度; 操作说明 moved to the pause menu so the options keep 7 rows at 240 GUI px."
+ },
+ {
+  "dimension": "ui",
+  "id": "UI-1",
+  "title": "Holding Ctrl (the default sprint key) blocks the inventory (E), chat (T, /) and pause (Escape) keys",
+  "severity": "minor",
+  "files": [
+   "src/ui/ui.js:555",
+   "src/game/input.js:278-299"
+  ],
+  "repro": "node tools/harness-uiw.mjs --url \"index.html?autostart=1&seed=42&mode=survival\" --steps tools/out/uiw/steps/ctrl.json --quiet. The script holds ControlLeft and W, then presses E, T and Escape (each with the Ctrl modifier), then releases Ctrl and presses E.",
+  "evidence": "Run output: \"sprinting: screen=null sprint=true held=ControlLeft+KeyW\" -> \"pressed E while Ctrl held: screen=null\" -> \"pressed T while Ctrl held: screen=null\" -> \"pressed Escape while Ctrl held: screen=null\" -> \"pressed E without Ctrl: screen=inventory\". Cause: in UIManager.onKeyDown, the no-screen branch returns early with `if (!playing || inField || e.ctrlKey || e.altKey || e.metaKey) return;`. Input._shouldBlockKey also calls preventDefault on Ctrl+E while the game is active, so neither the game nor the browser responds to the key.",
+  "expected": "As in Minecraft, E opens the inventory and Esc opens the pause menu (and T and / open the chat where the browser allows it) while the sprint key is held. A player sprinting with Ctrl+W who presses E gets the inventory.",
+  "actual": "Nothing happens until Ctrl is released. The key press is silently swallowed.",
+  "suggestedFix": "Do not bail out on e.ctrlKey for the game's own screen keys. For example, ignore only Alt/Meta, or ignore Ctrl only when it is not a bound game key (sprint): `if (!playing || inField || e.altKey || e.metaKey) return;`. Leave Ctrl+T, Ctrl+W and similar to the browser as before.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced with E:/playground/minecraft/tools/out/snap-w1/tools/out/uiw/steps/ctrl.json. While sprinting (held=ControlLeft+KeyW, sprint=true), Ctrl+E, Ctrl+T and Ctrl+Escape all leave screen=null. Plain E then gives screen=inventory. The code confirms it: src/ui/ui.js:555 `if (!playing || inField || e.ctrlKey || e.altKey || e.metaKey) return;`, and Input._shouldBlockKey (src/game/input.js:278) calls preventDefault on Ctrl+E while the game has input, so neither the game nor the browser acts on the key. It is also asymmetric: the in-screen branch (ui.js ~547) closes an open inventory on Ctrl+E but cannot open one. Vanilla behaves differently: KeyboardHandler and KeyMapping.click ignore modifiers, so E opens the inventory and Esc pauses while the sprint key is held. I validated the fix direction at runtime (E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/ctrlfix.json, ctrlKey masked for E/Escape/Slash): Ctrl+E then opens the inventory and Ctrl+Esc opens pause. Real-world scope is narrower than claimed. On Windows, Ctrl+Esc is taken by the OS (Start menu). In pointer-locked play, Esc releases the lock at browser level and pause opens through the lock-loss path. Outside fullscreen Keyboard Lock, Chrome reserves Ctrl+T for a new tab. The practical user-visible victims are E and '/'. Minor severity is correct.",
+  "refinedFix": "In UIManager.onKeyDown, drop e.ctrlKey from the no-screen guard: `if (!playing || inField || e.altKey || e.metaKey) return;`. This makes Ctrl+E, Ctrl+/ and Ctrl+Esc behave like the plain keys (vanilla ignores modifiers for these bindings) and matches the in-screen branch. No special handling is needed for Ctrl+T/N/W: outside fullscreen Keyboard Lock the browser consumes them before the page sees them. Inside Keyboard Lock, opening chat on Ctrl+T matches Minecraft. The suggested fix's note about leaving Ctrl+T to the browser 'as before' does not match its own code, but the code change itself is correct.",
+  "owners": [
+   "survival",
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "CONTAINERS: UIManager.onKeyDown no longer ignores Ctrl.",
+  "integratorNote": "CONTAINERS (wave 2); re-verified by the INTEGRATOR with real CDP keys: Ctrl held + E opens the inventory, Ctrl + Esc the pause menu (tools/steps/w2-ui-review.json)."
+ },
+ {
+  "dimension": "ui",
+  "id": "UI-2",
+  "title": "/kill typed in chat closes the death screen the command just opened; it reappears one frame later with a pointer-lock request in between",
+  "severity": "minor",
+  "files": [
+   "src/ui/chat.js:202-215",
+   "src/ui/ui.js:303-309",
+   "src/ui/ui.js:599-601"
+  ],
+  "repro": "node tools/harness-uiw.mjs --url \"index.html?autostart=1&seed=42&mode=survival\" --steps tools/out/uiw/steps/killflicker.json --quiet. The script wraps ui.setScreen and ui.requestLock with a logger, presses T, types /kill and presses Enter.",
+  "evidence": "Logged sequence: \"1323 setScreen(death) from chat | 1323 setScreen(null) from death pendingEnable->true | 1323 requestLock() | 1333 setScreen(death) from null\". 300 ms later: \"final screen=death timer=0.70\", so the 1 s respawn-button delay restarted. Cause: ChatScreen.send() runs the command (chat.js:209); player.kill emits playerDied and the death screen opens synchronously. send() then unconditionally calls this.ui.closeScreen() (chat.js:214). That closes the death screen (inGame=true), sets pendingEnable and requests pointer lock. The fallback in UIManager.update reopens the death screen on the next frame.",
+  "expected": "The death screen opens once and stays open. No pointer-lock request is made and the respawn timer is not reset.",
+  "actual": "For one frame the game is in the playing state with no screen and a dead player, and input is re-enabled. In a real browser the Enter key is a user gesture, so requestLock() grabs the pointer and releases it a frame later (cursor flicker), and the death screen flickers.",
+  "suggestedFix": "In ChatScreen.send(), close only the chat itself: `if (this.ui.screen === this) this.ui.closeScreen();`. Alternatively, close the chat before calling runCommand.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced with E:/playground/minecraft/tools/out/snap-w1/tools/out/uiw/steps/killflicker.json and a more detailed trace, E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/kill-lock.json. The trace shows: '221.6 setScreen(death) from chat | 221.8 setScreen(null) from death | 221.8 input.requestLock() userActivation.isActive=true | 234.9 setScreen(death) from null'. The cause is that ChatScreen.send() (src/ui/chat.js:214) unconditionally calls ui.closeScreen() after runCommand, and by then the screen is the DeathScreen (inGame:true), so it gets closed. The UI.update fallback (ui.js ~599) reopens it on the next frame. I validated the suggested fix at runtime (E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/kill-fix.json, closing only when ui.screen === chat): the sequence becomes just 'setScreen(chat) from null | setScreen(death) from chat', with no requestLock. Several impact claims are overstated. There is no visible death-screen flicker: the screen is re-added in the first rAF's ui.update before any paint (my rAF probe saw dom=1 in that frame). input.enabled flips true then false inside the same ui.update call, with no game logic in between. The timer 'restart' is about one frame (~13 ms). The real user-visible effect is the spurious requestPointerLock made with transient activation. In a real browser the pointer gets locked, then immediately released by the onLockChange handler because a screen is open, so the cursor hides and reappears and Chrome may flash its pointer-lock notice. In headless the request just fails with pointerlockerror. Minor severity is still right.",
+  "refinedFix": "In ChatScreen.send(), close only the chat itself: `if (this.ui.screen === this) this.ui.closeScreen();` (validated). Do not use the alternative of closing the chat before runCommand: that still calls setScreen(null), which sets pendingEnable and calls requestLock() before /kill opens the death screen.",
+  "owners": [
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "CONTAINERS: ChatScreen.send closes only itself.",
+  "integratorNote": "CONTAINERS (wave 2): ChatScreen.send closes only itself; runReviewFixes passes on the integrated build."
+ },
+ {
+  "dimension": "ui",
+  "id": "UI-3",
+  "title": "Number keys, Q and tooltips do nothing for the slot under a stationary cursor until the mouse moves",
+  "severity": "minor",
+  "files": [
+   "src/ui/containers.js:151-153",
+   "src/ui/containers.js:286-301",
+   "src/ui/containers.js:333-346",
+   "src/ui/ui.js:116-118"
+  ],
+  "repro": "node tools/harness-uiw.mjs --url \"index.html?autostart=1&seed=42&mode=survival\" --steps tools/out/uiw/steps/hovernomove.json --quiet. The script fills the main inventory, rests the mouse at (640,386), presses E, presses 1 without moving the mouse, then moves the mouse 1 px and presses 1 again.",
+  "evidence": "\"slot under mouse={\\\"kind\\\":\\\"inv\\\",\\\"index\\\":13} hover=null tooltip=none\" -> \"after Digit1 without moving: hotbar0=null\" -> after a 1 px move: \"hotbar0={\\\"id\\\":4,\\\"count\\\":13,...}\". ContainerScreen.hover is set only in onPointerMove. onOpen does not compute it, and UIManager tracks the mouse position only while a screen is already open.",
+  "expected": "As in Minecraft, which computes the hovered slot from the current mouse position every frame: the slot under the cursor is highlighted and shows its tooltip as soon as the screen opens, and 1-9 or Q act on it immediately. This matters when the inventory opens under a visible, still cursor (unlocked or automation mode, or a right-clicked crafting table).",
+  "actual": "No hover highlight or tooltip appears, and number keys and Q are ignored until the mouse moves at least one pixel.",
+  "suggestedFix": "Always record the last pointer position (window pointermove, regardless of the screen). In ContainerScreen.onOpen (and after tab or layout changes), resolve the hovered slot with document.elementFromPoint(ui.mouse.x, ui.mouse.y) -> slotFromTarget and call setHover(). Use the same position to place the cursor stack and the tooltip.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced with E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/hovernomove.json. With the inventory opened under a still cursor: 'slot under mouse={kind:inv,index:13} hover=null tooltip=none' and 'after Digit1 without moving: hotbar0=null'. After a 1 px move, Digit1 swaps the stack (hotbar0 = 13 cobblestone). The code confirms it: ContainerScreen.hover is only set in onPointerMove (src/ui/containers.js ~286) and pointerleave, onOpen (line 151) never resolves it, and UIManager only tracks the mouse while a screen is open (ui.js:117). Correction: the claim that there is no hover highlight is wrong. Screenshot E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/hover-still.png shows the CSS `.slot:hover` highlight on slot 13 while JS hover is null, so the user sees a highlighted slot that ignores 1-9 and Q and shows no tooltip. That is arguably more confusing. E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/hoverevents.json shows that Chrome dispatches pointerover/pointerenter/mouseover to the slot under the still cursor, but no pointermove, so the screen never notices. Minecraft computes hoveredSlot from the mouse position every frame, so keys work immediately. Real-world frequency in locked play is limited: after exitPointerLock the cursor reappears at its pre-lock spot and must happen to sit on the wanted slot. It is common in unlocked or automation mode. Minor severity is appropriate.",
+  "refinedFix": "Simplest robust fix: also handle boundary events on the container element, `this.el.addEventListener('pointerover', (e) => { this.ui.trackMouse(e); this.setHover(this.slotFromTarget(e.target)); });`. Chrome fires pointerover for a slot that appears under a stationary cursor. To also cover a key pressed in the very first frame, track the pointer position in UIManager regardless of `this.screen` (ui.js:116-118). In ContainerScreen.onOpen and after creative tab or page switches, resolve `this.slotFromTarget(document.elementFromPoint(ui.mouse.x, ui.mouse.y))` and call setHover(). Slots are not pointer-captured, and the overlay layer must stay pointer-events:none so elementFromPoint hits the slot.",
+  "owners": [
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "CONTAINERS: pointer tracked with no screen open; resolveHover on open / tab switch.",
+  "integratorNote": "CONTAINERS (wave 2): ContainerScreen.resolveHover on open / tab switch + pointer tracking; runReviewFixes passes."
+ },
+ {
+  "dimension": "ui",
+  "id": "UI-4",
+  "title": "Crosshair still drawn in third-person views (F5), over the player model",
+  "severity": "minor",
+  "files": [
+   "src/ui/ui.js:606"
+  ],
+  "repro": "node tools/harness-uiw.mjs --url \"index.html?autostart=1&seed=42&mode=survival\" --wait-for \"window.__ready\" --sleep 800 --steps tools/out/uiw/steps/f5.json. The script presses F5 once (back view) and again (front view).",
+  "evidence": "Eval output: \"perspective=1 crosshair display=\\\"\\\"\" and \"perspective=2 crosshair display=\\\"\\\"\". Screenshots tools/out/uiw/f5-third.png (crosshair on the back of Steve's head) and tools/out/uiw/f5-front.png (crosshair on Steve's face). The crosshair condition is `playing && !hudHidden && !debugVisible && !player.dead && (!screen || screen.transparent)`; it ignores game.perspective.",
+  "expected": "Minecraft draws the crosshair, and the F3 axis gizmo that replaces it, only in first person (thirdPersonView == 0 / CameraType.isFirstPerson()).",
+  "actual": "The crosshair stays in the centre of the screen in both third-person modes. In the front view it sits on the player's face, and it does not correspond to the targeted block.",
+  "suggestedFix": "Add `(this.game.perspective ?? 0) === 0` to the crosshair condition in UIManager.update. Apply the same first-person check to the F3 gizmo (hud.updateDebug / drawGizmo).",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced with E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/f5.json (hasPlayerModel=true). The results were perspective=1, crosshair computed display=block and perspective=2, crosshair display=block. Screenshots E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/f5-back.png (crosshair on the back of Steve's head) and f5-front.png (crosshair on his face). With F3 on in the front view, the axis gizmo is also drawn on the face (f5-front-f3.png, gizmo display=block). The crosshair condition at src/ui/ui.js:606 ignores game.perspective, and Hud.updateDebug (src/ui/hud.js:427) shows the gizmo whenever F3 is on. Minecraft's Gui.renderCrosshair wraps both the crosshair and the F3 gizmo in `options.getCameraType().isFirstPerson()` (1.12: `thirdPersonView == 0`). This is a real fidelity gap. Minor severity.",
+  "refinedFix": "In UIManager.update add `&& (this.game.perspective ?? 0) === 0` to the crosshair condition. In Hud.updateDebug, compute `const gizmoOn = on && (this.game.perspective ?? 0) === 0;`, use it for the gizmo's display toggle, and only call drawGizmo when gizmoOn. The F3 text panel stays visible in every perspective.",
+  "owners": [
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "CONTAINERS: crosshair + F3 gizmo only in first person.",
+  "integratorNote": "CONTAINERS (wave 2); re-verified by the INTEGRATOR: crosshair display none in both F5 views (tools/steps/w2-ui-review.json)."
+ },
+ {
+  "dimension": "ui",
+  "id": "UI-5",
+  "title": "/spawnpoint accepts a y coordinate that respawn ignores: the player always respawns on top of the column",
+  "severity": "minor",
+  "files": [
+   "src/game/commands.js:491-507",
+   "src/game/player.js:1031-1078"
+  ],
+  "repro": "node tools/harness-uiw.mjs --url \"index.html?autostart=1&seed=42&mode=survival\" --steps tools/out/uiw/steps/spawnpoint.json --quiet. In chat the script runs /fill 10 70 10 10 71 10 air (carves a 2-high pocket under stone; getTopY(10,10)=79), then /spawnpoint @s 10 70 10, then /kill, then clicks 重生 (Respawn).",
+  "evidence": "The chat confirms \"已将玩家的重生点设置为 10, 70, 10\" (spawn point set to 10, 70, 10). After respawn: \"respawned at 10.50, 80.00, 10.50 (spawnPoint {\\\"x\\\":10.5,\\\"y\\\":70,\\\"z\\\":10.5})\". Player.respawn() sets _snapPending, and _snapToColumnTop always moves the body to getTopY+1 (player.js:1055, 1073).",
+  "expected": "As in Minecraft (forced spawn): the player respawns at the given position when the two cells there are free (here the cave pocket at y=70). Otherwise the player goes to the world spawn.",
+  "actual": "The player respawns on the surface at y=80. A spawn point set inside a cave or a roofed house cannot be used, even though the command reports success with the y value.",
+  "suggestedFix": "Store whether the spawn point is explicit (e.g. spawnPoint.forced=true from /spawnpoint). In respawn(), when forced and the feet and head cells at the stored y are non-solid, use that y and skip the column-top snap. Otherwise fall back to the current behaviour. Alternatively, make the command reject or report a y it will not honour.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Re-ran E:/playground/minecraft/tools/out/snap-w1/tools/out/uiw/steps/spawnpoint.json. The pocket was 69:stone 70:air 71:air 72:stone with top=79. Chat reported '已将玩家的重生点设置为 10, 70, 10', and the player respawned at 10.50, 80.00, 10.50 with spawnPoint y=70. I also tested the most common usage, /spawnpoint with no arguments while standing under a 5x5 stone roof (E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/spawnroof.json). The spawn point was set to 7, 81, 7 and the player respawned at y=85 on top of the roof (screenshot E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/spawnroof.png). The cause is that Player.respawn() always sets _snapPending, and _snapToColumnTop (src/game/player.js:1055, 1073) moves the body to getTopY+1. The /spawnpoint command (src/game/commands.js:499) accepts and echoes y, but it is never used. In Minecraft, /spawnpoint sets a forced respawn position: respawn happens at pos+0.1 when the feet and head blocks allow it, otherwise at the world spawn. Only the world spawn uses the column top. Minor severity is appropriate.",
+  "refinedFix": "Have /spawnpoint store `{ x: x + 0.5, y, z: z + 0.5, forced: true }`, and keep /setworldspawn and the initial world spawn unforced. Persist `forced` in Player.serialize/deserialize; currently only x, y and z are written. In respawn(), when sp.forced is set, check the feet and head cells (floor(sp.y), floor(sp.y)+1) for non-solid blocks. If both are free, keep y = sp.y and skip the column-top snap. Run the same check inside the deferred _snapPending path, because the spawn chunk may not be loaded at respawn time. If either cell is obstructed, post a chat notice and fall back to the world spawn's column top, as Minecraft does.",
+  "owners": [
+   "survival",
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "Duplicate of CODE-4 / PLAYER-2."
+ },
+ {
+  "dimension": "ui",
+  "id": "UI-6",
+  "title": "GUI-scale button cycles to values above the window's maximum; they do nothing while the label claims a different size",
+  "severity": "minor",
+  "files": [
+   "src/ui/menus.js:437-444",
+   "src/ui/ui.js:193-200"
+  ],
+  "repro": "node tools/harness-uiw.mjs --url \"index.html\" --width 800 --height 600 --steps tools/out/uiw/steps/guiscale.json --quiet. The script opens 选项 (Options) from the title screen and clicks 界面尺寸 (GUI scale) repeatedly.",
+  "evidence": "\"label=界面尺寸：3 setting=3 effective scale=2\", \"label=界面尺寸：4 setting=4 effective scale=2\", \"label=界面尺寸：自动 setting=0 effective scale=2\" (screenshot tools/out/uiw/gs-800-3.png). At 1280x720 the maximum is 3, so \"4\" has no effect. At 2560x1440 the maximum is 6, but the button never offers 5 or 6. The button always cycles (cur+1)%5, and updateScale silently caps the value at the window maximum.",
+  "expected": "As in Minecraft: the GUI-scale option offers only Auto and 1..maxScale for the current window, and its label matches the size actually used.",
+  "actual": "At 800x600, three of the five button states (2, 3, 4) look identical to Auto. The label shows 3 or 4 while the GUI is rendered at 2, so clicks appear to do nothing.",
+  "suggestedFix": "Compute maxScale as in updateScale (expose it from UIManager). Cycle through 0..maxScale and label each state with the effective value. Alternatively, use a slider whose maximum is maxScale.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced with E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/guiscale.json at three window sizes. At 800x600: Auto→2, 1→1, 2→2, '3'→2, '4'→2 (screenshot E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/gs-800-3.png shows the label '界面尺寸：3' with the GUI rendered at scale 2). At 1280x720, the most common window size, '4'→3. At 2560x1440 the cycle is 0..4 with Auto=6, so 5 can never be selected. The cause is the menus.js:441 cycle `(cur + 1) % 5`, the hard clamp `Math.min(4, …)` in updateScale (ui.js:199), and the silent cap at the window maximum. The label shows the stored value instead of the effective one. Since 1.13, Minecraft's GUI-scale option cycles `(guiScale + 1) % (maxScale + 1)`, so only valid values are offered. The ui.md notes document the cap, but not the misleading label or the clicks that do nothing. Minor severity.",
+  "refinedFix": "In updateScale, store `this.maxScale = max` and clamp the setting with `Math.min(setting, max)` instead of the hard 4 cap, so 5 and 6 are possible on large or HiDPI screens. In the options button, cycle `set('guiScale', (Math.min(cur, ui.maxScale) + 1) % (ui.maxScale + 1))`. Make refresh() label the effective scale, e.g. `自动（${ui.scale}）` or `${ui.scale}`, and re-run refresh() on resize and settingsChanged while the options screen is open.",
+  "owners": [
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "CONTAINERS: GUI-scale button cycles Auto and 1..min(maxScale, 4).",
+  "integratorNote": "CONTAINERS (wave 2): GUI scale cycles Auto, 1..min(window max, 4) and relabels on resize; runReviewFixes passes."
+ },
+ {
+  "dimension": "ui",
+  "id": "UI-7",
+  "title": "A drag that starts on a slot that cannot take the held item and ends on one empty slot swaps with the start slot instead of filling the slot under the cursor",
+  "severity": "minor",
+  "files": [
+   "src/ui/containers.js:277-284",
+   "src/ui/containers.js:308-316"
+  ],
+  "repro": "node tools/harness-uiw.mjs --url \"index.html?autostart=1&seed=42&mode=survival\" --steps tools/out/uiw/steps/b-inv4.json --quiet. In steps X4/X5 the cursor holds 5 diamonds; the script presses the left button on main slot 10 (3 oak logs), moves with the button held to the empty slot 20, and releases there.",
+  "evidence": "Result \"X5 pressed on logs(10), released on empty(20): inv=0:4x30 10:261x5 11:3x20 | cur=9x3\": the diamonds went into slot 10 and the logs are on the cursor, while slot 20 (under the cursor on release) stays empty. beginDrag skips the start slot because it holds a different item. The drag set is [slot20] (length 1), so endDrag falls through to `this.model.click(d.start, d.button)` on the start slot. With two valid slots visited, the stack is spread over those two slots instead, so the result depends on how many slots were crossed.",
+  "expected": "Minecraft treats a quick-craft drag whose set contains exactly one slot as a PICKUP on that slot: the diamonds go into slot 20 and the logs stay in slot 10. When no valid slot was visited, it clicks the slot under the cursor at release.",
+  "actual": "The held stack is swapped with the slot where the drag started.",
+  "suggestedFix": "In endDrag: if d.refs.length === 1, call model.click(d.refs[0], d.button). If d.refs is empty, click the slot under the pointer at pointerup (pass the event into onPointerUp and resolve it with slotFromTarget), falling back to d.start. Keep the multi-slot branch unchanged.",
+  "verdict": "confirmed",
+  "verifyReasoning": "Reproduced with a realistic multi-step drag (E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/drag1.json): pick up 5 diamonds, press on slot 10 (3 oak logs), move within slot 10, then halfway, then onto empty slot 20, and release there. Mid-drag state: refs=[inv 20], start=inv 10. After release: inv=10:261x5 and the cursor holds 9x3, so the diamonds were swapped into the start slot and slot 20 is still empty (screenshot E:/playground/minecraft/tools/out/snap-w1/tools/out/vuiw/drag1-after.png). The cause is that beginDrag (containers.js:277) skips the start slot because canDragInto fails for a different item, and endDrag (containers.js:308) falls back to `model.click(d.start, …)` whenever refs.length <= 1. In Minecraft, AbstractContainerMenu.doClick at QUICK_CRAFT stage 2 does `if (quickcraftSlots.size() == 1) doClick(slot, quickcraftType, PICKUP)`. With an empty set, the client's mouseReleased sends PICKUP for the slot under the mouse at release, or throws the stack if the release is outside the GUI. So the claimed Minecraft behaviour is accurate. Minor severity.",
+  "refinedFix": "Pass the releasing event into endDrag from both callers: the window pointerup that UIManager already forwards, and the `!(e.buttons & bit)` path in onPointerMove. Then: keep the double-click branch as it is. If refs.length > 1, call model.drag(refs, button). If refs.length === 1, call `d.button === 2 ? model.drag(d.refs, 2) : model.click(d.refs[0], d.button)`, which keeps creative full-stack semantics. If refs is empty, resolve `entry = this.slotFromTarget(e?.target)` (slots are not pointer-captured). If there is an entry, call model.click(entry.ref, d.button). Otherwise, if this.isOutside(e.target), call model.clickOutside(d.button === 1 ? 1 : 0), as Minecraft's PICKUP at -999 does. Otherwise do nothing, or fall back to d.start.",
+  "owners": [
+   "containers"
+  ],
+  "status": "fixed",
+  "leadNote": "CONTAINERS: single-slot drag clicks that slot; none -> slot under the pointer.",
+  "integratorNote": "CONTAINERS (wave 2): single-slot drag clicks that slot / the slot under the pointer; runReviewFixes passes."
+ }
+]

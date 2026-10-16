@@ -1,0 +1,11 @@
+[
+  {"eval": "(async () => { const g = window.__game; const w = await import('/tools/mob-wire.js'); window.__w = w; await w.wire(g); g.setTime(18000); g.debug.lookDeg(0, -10); return 'wired, animals ' + g.entities.countEntities('mob'); })()"},
+  {"sleep": 500},
+  {"eval": "(() => { const g = window.__game; const z1 = window.__w.spawnInFront(g, 'zombie', 12, -2); const z2 = window.__w.spawnInFront(g, 'zombie', 14, 3); return [!!z1, !!z2, g.player.health]; })()"},
+  {"sleep": 2500},
+  {"screenshot": "tools/out/mobs/night-zombies-1.png"},
+  {"eval": "window.__w.summary(window.__game, 30) + ' || player hp ' + window.__game.player.health"},
+  {"sleep": 2500},
+  {"screenshot": "tools/out/mobs/night-zombies-2.png"},
+  {"eval": "window.__w.summary(window.__game, 30) + ' || player hp ' + window.__game.player.health + ' dead ' + window.__game.player.dead"}
+]

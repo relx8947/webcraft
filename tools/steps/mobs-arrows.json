@@ -1,0 +1,15 @@
+[
+  {"eval": "(async () => { const g = window.__game; const w = await import('/tools/mob-wire.js'); window.__w = w; const r = await w.wire(g); r.spawner.hostileCap = 0; g.setTime(18000); g.debug.lookDeg(0, -4); g.debug.hideHud(true); const s = w.spawnInFront(g, 'skeleton', 10, 0); window.__s = s; g.debug.lookAt(s.x, s.y + 1.4, s.z); return [s.x, s.y, s.z]; })()"},
+  {"waitFor": "window.__s.useTicks > 12", "timeout": 20000},
+  {"screenshot": "tools/out/mobs/arrow-0.png"},
+  {"waitFor": "window.__game.entities.countEntities('arrow') > 0", "timeout": 20000},
+  {"sleep": 120},
+  {"screenshot": "tools/out/mobs/arrow-1.png"},
+  {"eval": "(() => { const g = window.__game; const a = g.entities.list.filter(e => e.type === 'arrow'); return a.map(x => x.x.toFixed(2) + ',' + x.y.toFixed(2) + ',' + x.z.toFixed(2) + ' v' + Math.hypot(x.vx, x.vy, x.vz).toFixed(1)).join(' | ') + ' hp ' + g.player.health; })()"},
+  {"sleep": 2500},
+  {"eval": "(() => { const g = window.__game; g.setGameMode('creative'); return 'hp ' + g.player.health + ' arrows ' + g.entities.countEntities('arrow'); })()"},
+  {"sleep": 6000},
+  {"eval": "(() => { const g = window.__game; const a = g.entities.list.filter(e => e.type === 'arrow'); if (a.length) { const x = a[a.length - 1]; g.debug.tp(x.x + 1.5, x.y + 0.6, x.z + 1.5); g.debug.lookAt(x.x, x.y, x.z); } return a.map(x => x.x.toFixed(1) + ',' + x.y.toFixed(1) + ',' + x.z.toFixed(1) + (x.inGround ? ' G' : '')).join(' | '); })()"},
+  {"sleep": 400},
+  {"screenshot": "tools/out/mobs/arrow-stuck.png"}
+]

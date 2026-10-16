@@ -1,0 +1,21 @@
+[
+  {"log": "stress: 25 water + 4 lava sources on a 64x64 platform crossing 16 chunks; frame times while flowing"},
+  {"eval": "import('/tools/fluids-helpers.js').then((m) => m.install())"},
+  {"eval": "__game.debug.setTime(6000); __game.debug.hideHud(true); __fx.fill(-32, 100, -32, 31, 100, 31, 'stone') + __fx.fill(-32, 101, -32, 31, 104, 31, 'air')"},
+  {"eval": "__fx.view(0.5, 130, 40.5, 0.5, 100, 0.5)"},
+  {"eval": "__game.debug.waitIdle(20000)"},
+  {"eval": "JSON.stringify(__game.debug.perf(true))"},
+  {"eval": "(() => { let n = 0; for (let x = -26; x <= 26; x += 13) for (let z = -26; z <= 26; z += 13) { __game.world.setBlock(x, 101, z, 14); n++; } for (const [x, z] of [[-20, 7], [20, -7], [7, 20], [-7, -20]]) __game.world.setBlock(x, 101, z, 15); return n; })()"},
+  {"sleep": 2500},
+  {"screenshot": "tools/out/w2/stress-mid.png"},
+  {"eval": "__fx.settle(60000).then((r) => JSON.stringify(r))"},
+  {"eval": "JSON.stringify(__game.debug.perf(true))"},
+  {"eval": "JSON.stringify(__fx.census(-32, 101, -32, 31, 101, 31))"},
+  {"screenshot": "tools/out/w2/stress-end.png"},
+  {"log": "drain: remove every water source at once"},
+  {"eval": "(() => { for (let x = -26; x <= 26; x += 13) for (let z = -26; z <= 26; z += 13) __game.world.setBlock(x, 101, z, 0); return 'drained'; })()"},
+  {"eval": "__fx.settle(60000).then((r) => JSON.stringify(r))"},
+  {"eval": "JSON.stringify(__game.debug.perf(true))"},
+  {"eval": "JSON.stringify(__fx.census(-32, 101, -32, 31, 101, 31))"},
+  {"screenshot": "tools/out/w2/stress-drained.png"}
+]

@@ -1,0 +1,10 @@
+[
+  { "log": "phase 1: load, edit, save, in-page reload" },
+  { "waitFor": "window.__done === true", "timeout": 240000 },
+  { "eval": "JSON.stringify({ verified: window.__results.verified, load: window.__results.load && window.__results.load.fullLoadMs })" },
+  { "log": "phase 2: real page reload, reopen the IndexedDB world" },
+  { "eval": "setTimeout(() => { location.href = location.pathname + '?rd=8&phase=2'; }, 50); true" },
+  { "sleep": 1500 },
+  { "waitFor": "window.__done === true && window.__results.phase === 2", "timeout": 120000 },
+  { "eval": "JSON.stringify({ phase: window.__results.phase, verified: window.__results.verified, reload: window.__results.reload })" }
+]

@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebCraft entity renderer test</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; left: 6px; top: 4px; color: #fff; font: 12px/1.35 monospace; text-shadow: 1px 1px 0 #000;
+         white-space: pre; pointer-events: none; }
+  .lbl { position: fixed; color: #fff; font: 12px monospace; text-shadow: 1px 1px 0 #000; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">loading…</div>
+<script type="module">
+// Standalone test of src/render/entityrenderer.js + src/game/particles.js + src/game/entities.js with its own
+// WebGL2 context and the real texture array (textures.js). URL parameters:
+//   view=scene (default) | hand | handgrid | helditems | items (close-up of the item grid) | player | night | cave
+//        | ambient          (handgrid / helditems: use a 2400x810 viewport for 16:9 cells)
+//   t=<s>          animation time (item age / particle time), default 1.3
+//   time=0..1      time of day (daylight), default 0.25
+//   hand=empty|block|pickaxe|sword|torch|flower|stick|<item name>   swing=0..1   equip=0..1
+//   bobx, boby, swayyaw, swaypitch (degrees)   HandState view bob / sway      face=<deg>   player models' facing
+//   particles=0    hide particles      hud=0   hide the text overlay      ground=0   no ground blocks
+//   live=1         run the real EntityManager + ParticleSystem in real time instead of fixed poses
+//                  (items=<n> drops, perspective=1 adds the player model)      anim=1   animate particles
+//   window.__bench(n, mult), window.__allocLoop(n) (tools/entities-alloc.mjs; probe=manager: manager list only)
+import { generateTextures, getLayerAlphaModes, buildMipChain } from '../src/render/textures.js';
+import { EntityRenderer } from '../src/render/entityrenderer.js';
+import { ParticleSystem } from '../src/game/particles.js';
+import { EntityManager } from '../src/game/entities.js';
+import { Inventory } from '../src/game/inventory.js';
+import { BLOCK, itemId as itemIdByName, ITEM } from '../src/world/registry.js';
+import { computeDaylight } from '../src/config.js';
+import { mat4Create, mat4Perspective, mat4ViewRotation, mat4Multiply } from '../src/util/math.js';
+
+const P = new URLSearchParams(location.search);
+const num = (k, d) => (P.has(k) && P.get(k) !== '' && Number.isFinite(Number(P.get(k))) ? Number(P.get(k)) : d);
+const VIEW = P.get('view') ?? 'scene';
+const T = num('t', 1.3);
+const hud = document.getElementById('hud');
+if (P.get('hud') === '0') hud.style.display = 'none';
+const DEG = Math.PI / 180;
+
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: true, stencil: true, powerPreference: 'high-performance' });
+const dpr = window.devicePixelRatio || 1;
+canvas.width = Math.round(innerWidth * dpr);
+canvas.height = Math.round(innerHeight * dpr);
+
+// ---------------------------------------------------------------- texture array (as the Renderer does)
+const t0 = performance.now();
+const tex = generateTextures();
+const modes = getLayerAlphaModes();
+const mips = buildMipChain(tex.data, tex.size, tex.layers, modes);
+const textureArray = gl.createTexture();
+gl.activeTexture(gl.TEXTURE0);
+gl.bindTexture(gl.TEXTURE_2D_ARRAY, textureArray);
+gl.texStorage3D(gl.TEXTURE_2D_ARRAY, mips.length, gl.RGBA8, tex.size, tex.size, tex.layers);
+gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+mips.forEach((lv, k) => {
+  const s = tex.size >> k;
+  gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, k, 0, 0, 0, s, s, tex.layers, gl.RGBA, gl.UNSIGNED_BYTE, lv);
+});
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_LINEAR);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAX_LEVEL, mips.length - 1);
+const tTex = performance.now() - t0;
+
+const t1 = performance.now();
+const er = new EntityRenderer(gl, textureArray);   // GPU alpha read-back path (like inside the Renderer)
+const tER = performance.now() - t1;
+
+// ---------------------------------------------------------------- fake world (flat ground at y = 64)
+const GROUND = 64;
+const extra = new Map();   // numeric cell key -> id (Smi keys: lookups allocate nothing, see tools/entities-alloc.mjs)
+const key = (x, y, z) => (((x + 512) & 1023) * 1024 + ((z + 512) & 1023)) * 256 + (y & 255);
+const world = {
+  getBlock(x, y, z) {
+    const e = extra.get(key(x, y, z));
+    if (e !== undefined) return e;
+    if (VIEW === 'cave') return y < GROUND || y >= GROUND + 4 ? BLOCK.STONE : 0;
+    return y < GROUND - 1 ? BLOCK.STONE : y === GROUND - 1 ? BLOCK.GRASS_BLOCK : 0;
+  },
+  setBlock(x, y, z, id) { extra.set(key(x, y, z), id); return true; },
+  getLight(x, y, z) {
+    if (VIEW === 'cave') {
+      const d = Math.hypot(x - 2, y - 65, z + 2);
+      return Math.max(0, Math.min(15, 14 - Math.round(d)));    // torch light only
+    }
+    return 0xf0;
+  },
+};
+
+// ---------------------------------------------------------------- scene content
+const timeOfDay = num('time', VIEW === 'night' ? 0.75 : 0.25);
+const daylight = computeDaylight(timeOfDay);
+const night = 1 - Math.min(1, Math.max(0, (daylight - 0.2) / 0.8));
+const skyTint = [0.85 + 0.15 * (1 - night), 0.92 + 0.08 * (1 - night), 1.35 - 0.35 * (1 - night)];
+const fogColor = VIEW === 'cave' ? [0.02, 0.02, 0.03] : [0.75 * daylight + 0.02, 0.85 * daylight + 0.02, 1.0 * daylight + 0.04];
+const skyColor = VIEW === 'cave' ? [0.01, 0.01, 0.015] : [0.47 * daylight, 0.65 * daylight, 1.0 * daylight];
+
+const entities = [];
+const light = (sky, blk = 0) => (sky << 4) | blk;
+const caveLight = (x, y, z) => world.getLight(Math.floor(x), Math.floor(y), Math.floor(z));
+// ground: 'block' entities (also exercises the block kind); ground=0 leaves them out (profiling)
+for (let z = -14; z <= (P.get('ground') === '0' ? -15 : 6); z++) {
+  for (let x = -10; x <= 10; x++) {
+    if (VIEW === 'cave') {
+      entities.push({ kind: 'block', blockId: BLOCK.STONE, x: x + 0.5, y: GROUND - 1, z: z + 0.5, scale: 1, light: caveLight(x, GROUND, z), flash: 0 });
+    } else {
+      entities.push({ kind: 'block', blockId: BLOCK.GRASS_BLOCK, x: x + 0.5, y: GROUND - 1, z: z + 0.5, scale: 1, light: light(15), flash: 0 });
+    }
+  }
+}
+// decoration blocks behind the item grid
+const deco = [
+  [BLOCK.STONE, -4, 0], [BLOCK.OAK_LOG, -3, 0], [BLOCK.GLASS, -2, 0], [BLOCK.OAK_LEAVES, -1, 0], [BLOCK.TNT, 0, 0],
+  [BLOCK.ICE, 1, 0], [BLOCK.CACTUS, 2, 0], [BLOCK.TORCH, 3, 0], [BLOCK.POPPY, 4, 0], [BLOCK.SAND, 5, 1.6],
+];
+for (const [id, dx, lift] of deco) {
+  entities.push({ kind: 'block', blockId: id, x: dx + 0.5, y: GROUND + lift, z: -9.5, scale: id === BLOCK.TNT ? 1.12 : 1,
+    light: VIEW === 'cave' ? caveLight(dx, GROUND, -9) : light(15), flash: id === BLOCK.TNT ? 0.6 : 0,
+    shadowY: GROUND, shadow: Math.max(0, (1 - lift / 2) * 0.5), shadowRadius: 0.5 });
+}
+// item grid: rows of blocks, plants, tools/items
+const rows = [
+  ['grass_block', 'stone', 'dirt', 'cobblestone', 'oak_log', 'oak_planks', 'glass', 'oak_leaves', 'ice', 'cactus', 'crafting_table', 'furnace', 'tnt', 'white_wool'],
+  ['poppy', 'dandelion', 'oak_sapling', 'short_grass', 'fern', 'sugar_cane', 'torch', 'brown_mushroom', 'cornflower', 'dead_bush', 'bookshelf', 'glowstone', 'jack_o_lantern', 'birch_leaves'],
+  ['stick', 'coal', 'diamond', 'iron_ingot', 'apple', 'bread', 'wooden_pickaxe', 'iron_sword', 'diamond_axe', 'golden_shovel', 'bucket', 'water_bucket', 'feather', 'flint_and_steel'],
+];
+const counts = [1, 2, 20, 40, 64, 1, 5];
+rows.forEach((row, r) => {
+  row.forEach((name, c) => {
+    const id = itemIdByName(name);
+    const x = (c - (row.length - 1) / 2) * 0.95, z = -2.5 - r * 1.1;
+    entities.push({
+      kind: 'item', x, y: GROUND, z, itemId: id, count: r === 0 ? counts[c % counts.length] : 1,
+      age: T + c * 0.37 + r * 0.9, seed: ((c * 7 + r * 3) % 11) / 11, shadowY: GROUND, shadow: 0.375, shadowRadius: 0.15,
+      light: VIEW === 'cave' ? caveLight(x, GROUND + 0.1, z) : light(15),
+    });
+  });
+});
+
+// player models ('model' kind) for view=player: standing, walking, sneaking, swinging, hurt, dead
+if (VIEW === 'player') {
+  const facing = num('face', 180) * DEG;   // default: facing the camera (south)
+  const base = { kind: 'model', model: 'player', y: GROUND, bodyYaw: facing, headYaw: facing, headPitch: 0, limbSwing: 0,
+    limbSwingAmount: 0, attack: 0, sneaking: false, age: T, hurt: 0, death: 0, light: light(15), itemId: 0,
+    shadowY: GROUND, shadow: 0.5, shadowRadius: 0.5 };
+  const poses = [
+    { headYaw: facing + 0.5, headPitch: -0.2 },
+    { limbSwing: 1.1 + T * 4, limbSwingAmount: 1, itemId: ITEM.IRON_SWORD },
+    { sneaking: true, itemId: BLOCK.GRASS_BLOCK, headPitch: 0.3 },
+    { attack: num('swing', 0.35), itemId: ITEM.DIAMOND_PICKAXE },
+    { hurt: 1, bodyYaw: facing - 0.9, headYaw: facing - 0.6, itemId: BLOCK.TORCH },
+    { death: 1.2, itemId: 0 },
+  ];
+  poses.forEach((p, i) => entities.push({ ...base, x: (i - 2.5) * 1.6 + 0.5, z: -3.5, ...p }));
+}
+
+// ambient scene (view=ambient): torches, a lava pool and a stone slab holding water (drips under it)
+if (VIEW === 'ambient') {
+  const put = (id, x, y, z, lit = 0xf0) => {
+    extra.set(key(x, y, z), id);
+    entities.push({ kind: 'block', blockId: id, x: x + 0.5, y, z: z + 0.5, scale: 1, light: lit, flash: 0 });
+  };
+  for (const [x, z] of [[-3, -3], [0, -4], [3, -3], [-1, -1]]) put(BLOCK.TORCH, x, GROUND, z, light(15, 14));
+  for (let x = 2; x <= 5; x++) for (let z = -8; z <= -6; z++) {
+    extra.set(key(x, GROUND - 1, z), BLOCK.LAVA);
+    entities.push({ kind: 'block', blockId: BLOCK.LAVA, x: x + 0.5, y: GROUND - 1, z: z + 0.5, scale: 1, light: light(15, 15), flash: 0 });
+  }
+  for (let x = -6; x <= -3; x++) for (let z = -8; z <= -6; z++) {
+    put(BLOCK.STONE, x, GROUND + 3, z);
+    put(BLOCK.WATER, x, GROUND + 4, z);
+  }
+}
+
+// particles (real ParticleSystem on the fake world)
+const game = { world, player: null, audio: null };
+const particles = new ParticleSystem(game, { seed: 7 });
+game.particles = particles;
+if (VIEW === 'ambient') {
+  // a (fake) player near the camera drives the ambient display ticks; simulate t seconds of them
+  game.player = { x: 0.5, y: GROUND, z: 1, eyeHeight: 1.62, dead: false };
+  for (let i = 0; i < Math.round(Math.max(T, 2.5) * 60); i++) particles.update(1 / 60);
+} else if (P.get('particles') !== '0') {
+  const step = (s) => { for (let i = 0; i < Math.round(s * 60); i++) particles.update(1 / 60); };
+  particles.spawnBlockBreak(-6, GROUND, -5, BLOCK.GRASS_BLOCK);
+  particles.spawnBlockBreak(6, GROUND, -5, BLOCK.OAK_LEAVES);
+  step(Math.min(T, 0.25) * 0.6);
+  particles.spawnBlockBreak(-6, GROUND, -7, BLOCK.STONE);
+  particles.spawnBlockBreak(6, GROUND, -7, BLOCK.GLASS);
+  for (let k = 0; k < 6; k++) particles.spawnBlockHit(-3, GROUND - 1, -1, 2, BLOCK.GRASS_BLOCK);
+  particles.spawnSmoke(-2.5, GROUND + 0.6, -12, 14);
+  particles.spawnExplosion(4, GROUND + 3.0, -14, 4);
+  extra.set(key(0, GROUND - 1, -6), BLOCK.WATER);
+  particles.spawnSplash(0.5, GROUND - 1 + 14 / 16, -5.5, 0.6);
+  step(Math.min(0.12, T * 0.1));
+}
+
+// ---------------------------------------------------------------- live mode: real EntityManager
+let manager = null;
+if (P.get('live') === '1') {
+  const player = { x: 0.5, y: GROUND, z: 2.5, height: 1.8, width: 0.6, dead: false, mode: 'survival', inventory: new Inventory(), yaw: 0, pitch: 0, eyeHeight: 1.62 };
+  game.player = player;
+  manager = new EntityManager(game);
+  game.entities = manager;
+  // items=<n> drops (default 40, several kinds), a primed TNT, falling sand; perspective=1 adds the player model
+  const kinds = [BLOCK.STONE, BLOCK.DIRT, ITEM.DIAMOND, ITEM.STICK, BLOCK.POPPY, ITEM.IRON_PICKAXE, BLOCK.TORCH, BLOCK.GLASS];
+  const nItems = num('items', 40);
+  for (let i = 0; i < nItems; i++) {
+    manager.spawnItem({ id: kinds[i % (nItems > 40 ? 8 : 4)], count: 1 + (i % 7) }, (i % 10) - 4.5, GROUND + 3, -3 - Math.floor(i / 10));
+  }
+  manager.spawnPrimedTnt(3.5, GROUND, -8.5);
+  if (nItems > 40) for (let k = 0; k < 4; k++) manager.spawnFallingBlock(BLOCK.SAND, -6.5 + k, GROUND + 30 + k * 8, -6.5);
+  game.perspective = num('perspective', 0);
+  game.interaction = { getHandState: () => hand };
+}
+
+// ---------------------------------------------------------------- hand
+const HAND_ITEMS = { empty: 0, block: BLOCK.GRASS_BLOCK, pickaxe: ITEM.IRON_PICKAXE, sword: ITEM.DIAMOND_SWORD, torch: BLOCK.TORCH,
+  flower: BLOCK.POPPY, stick: ITEM.STICK, glass: BLOCK.GLASS, leaves: BLOCK.OAK_LEAVES, ice: BLOCK.ICE, apple: ITEM.APPLE };
+function handItem(name) {
+  if (name in HAND_ITEMS) return HAND_ITEMS[name];
+  try { return itemIdByName(name); } catch { return 0; }
+}
+const hand = {
+  itemId: handItem(P.get('hand') ?? 'pickaxe'), swing: num('swing', 0), equip: num('equip', 1),
+  bobX: num('bobx', 0), bobY: num('boby', 0), bobRoll: 0, bobPitch: 0, swayYaw: num('swayyaw', 0) * DEG, swayPitch: num('swaypitch', 0) * DEG,
+  light: VIEW === 'cave' ? light(0, 12) : light(15), count: 1,
+};
+
+// ---------------------------------------------------------------- camera + ctx (same fields as the Renderer)
+const cams = {
+  scene: { x: 0.5, y: GROUND + 2.4, z: 3.2, yaw: 0, pitch: -24 },
+  items: { x: 0.5, y: GROUND + 1.25, z: 0.6, yaw: 0, pitch: -28 },
+  hand: { x: 0.5, y: GROUND + 1.62, z: 3.2, yaw: 0, pitch: -12 },
+  handgrid: { x: 0.5, y: GROUND + 1.62, z: 3.2, yaw: 0, pitch: -12 },
+  night: { x: 0.5, y: GROUND + 2.4, z: 3.2, yaw: 0, pitch: -24 },
+  player: { x: 0.5, y: GROUND + 1.9, z: 2.6, yaw: 0, pitch: -12 },
+  cave: { x: 0.5, y: GROUND + 1.62, z: 1.2, yaw: 0, pitch: -26 },
+  ambient: { x: 0.5, y: GROUND + 1.9, z: 2.0, yaw: 0, pitch: -14 },
+};
+const camDef = cams[VIEW] ?? cams.scene;
+const cam = { x: num('x', camDef.x), y: num('y', camDef.y), z: num('z', camDef.z), yaw: num('yaw', camDef.yaw) * DEG, pitch: num('pitch', camDef.pitch) * DEG };
+const proj = mat4Create(), viewRot = mat4Create(), viewProj = mat4Create();
+const ctx = {
+  gl, proj, viewRot, viewProj, cameraPos: [0, 0, 0], camRight: [1, 0, 0], camUp: [0, 1, 0], fogColor,
+  fogStart: VIEW === 'cave' ? 24 : 0.6 * 8 * 16, fogEnd: VIEW === 'cave' ? 40 : 0.95 * 8 * 16, daylight, skyTint,
+  time: T, aspect: 1, texture: textureArray,
+};
+function setupCtx(W, H) {
+  ctx.aspect = W / H;
+  mat4Perspective(proj, 70 * DEG, ctx.aspect, 0.05, 2048);
+  mat4ViewRotation(viewRot, cam.yaw, cam.pitch, 0);
+  mat4Multiply(viewProj, proj, viewRot);
+  ctx.cameraPos[0] = cam.x; ctx.cameraPos[1] = cam.y; ctx.cameraPos[2] = cam.z;
+  ctx.camRight[0] = viewRot[0]; ctx.camRight[1] = viewRot[4]; ctx.camRight[2] = viewRot[8];
+  ctx.camUp[0] = viewRot[1]; ctx.camUp[1] = viewRot[5]; ctx.camUp[2] = viewRot[9];
+}
+
+function baseState(x, y, W, H) {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(x, y, W, H);
+  gl.enable(gl.DEPTH_TEST);
+  gl.depthFunc(gl.LEQUAL);
+  gl.depthMask(true);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.BACK);
+  gl.frontFace(gl.CCW);
+  gl.disable(gl.BLEND);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, textureArray);
+}
+
+const renderList = [];
+let frames = 0;
+const cpu = [];
+function drawWorld(W, H) {
+  setupCtx(W, H);
+  baseState(0, 0, W, H);
+  gl.clearColor(skyColor[0], skyColor[1], skyColor[2], 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  renderList.length = 0;
+  // probe=manager: only the manager's render items reach the renderer (the game's case; see __allocLoop)
+  if (P.get('probe') !== 'manager' || !manager) for (const e of entities) renderList.push(e);
+  if (manager) manager.getRenderList(renderList);
+  const a = performance.now();
+  er.renderEntities(ctx, renderList);
+  baseState(0, 0, W, H);
+  const pd = particles.getRenderData();
+  er.renderParticles(ctx, pd);
+  cpu.push(performance.now() - a);
+  if (cpu.length > 60) cpu.shift();
+}
+
+let last = performance.now();
+function frame() {
+  const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+  if (manager || P.get('anim') === '1') {
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+    manager?.update(dt);
+    particles.update(dt);
+  }
+  if (VIEW === 'helditems') {
+    // 3 x 5 gallery of held items at rest (use a wide viewport, e.g. 2400x810, for 16:9 cells)
+    const ids = [0, BLOCK.GRASS_BLOCK, BLOCK.GLASS, BLOCK.OAK_LEAVES, BLOCK.ICE, BLOCK.TORCH, BLOCK.POPPY, BLOCK.CACTUS,
+      ITEM.STICK, ITEM.DIAMOND_SWORD, ITEM.WOODEN_AXE, ITEM.APPLE, ITEM.BUCKET, ITEM.FLINT_AND_STEEL, BLOCK.CRAFTING_TABLE];
+    const cols = 5, rowsN = 3;
+    const cw = Math.floor(W / cols), ch = Math.floor(H / rowsN);
+    setupCtx(cw, ch);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.clearColor(0.08, 0.08, 0.1, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    ids.forEach((id, i) => {
+      const c = i % cols, r = Math.floor(i / cols);
+      const x = c * cw, y = H - (r + 1) * ch;
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(x + 1, y + 1, cw - 2, ch - 2);
+      gl.clearColor(skyColor[0], skyColor[1], skyColor[2], 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      baseState(x, y, cw, ch);
+      er.renderHand(ctx, { ...hand, itemId: id });
+    });
+    gl.disable(gl.SCISSOR_TEST);
+  } else if (VIEW === 'handgrid') {
+    // rows: empty hand / grass block / iron pickaxe; columns: swing phases
+    const items = [0, BLOCK.GRASS_BLOCK, ITEM.IRON_PICKAXE];
+    const swings = [0, 0.15, 0.3, 0.5, 0.75];
+    const cw = Math.floor(W / swings.length), ch = Math.floor(H / items.length);
+    setupCtx(cw, ch);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.clearColor(0.08, 0.08, 0.1, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    for (let r = 0; r < items.length; r++) {
+      for (let c = 0; c < swings.length; c++) {
+        const x = c * cw, y = H - (r + 1) * ch;
+        gl.enable(gl.SCISSOR_TEST);
+        gl.scissor(x + 1, y + 1, cw - 2, ch - 2);
+        gl.clearColor(skyColor[0], skyColor[1], skyColor[2], 1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        baseState(x, y, cw, ch);
+        er.renderHand(ctx, { ...hand, itemId: items[r], swing: swings[c] });
+      }
+    }
+    gl.disable(gl.SCISSOR_TEST);
+  } else {
+    drawWorld(W, H);
+    if (VIEW !== 'items' && VIEW !== 'player') {
+      baseState(0, 0, W, H);
+      er.renderHand(ctx, hand);
+    }
+  }
+  frames++;
+  if (frames % 10 === 1) {
+    const avg = cpu.length ? cpu.reduce((p, q) => p + q, 0) / cpu.length : 0;
+    hud.textContent = `entity test  view=${VIEW}  t=${T}  time=${timeOfDay}  textures ${tTex.toFixed(0)} ms  EntityRenderer init ${tER.toFixed(1)} ms` +
+      `\nentities ${renderList.length}  instances ${er.stats.instances}  draws ${er.stats.drawCalls}  particles ${er.stats.particles}  sprite models ${er.stats.spriteModels}` +
+      `\nrenderEntities+renderParticles cpu ${avg.toFixed(3)} ms` + (manager ? `\nlive: entities ${manager.count}` : '') +
+      `\nhand item ${hand.itemId} swing ${hand.swing} equip ${hand.equip}`;
+  }
+  if (frames === 4) window.__ready = true;
+  if (P.get('live') === '1' || P.get('anim') === '1') requestAnimationFrame(frame);
+  else if (frames < 6) requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+window.__er = er;
+window.__particles = particles;
+window.__manager = () => manager;
+// allocation probe (tools/entities-alloc.mjs): n frames of the per-frame entity work — particle spawns + update,
+// EntityManager update + getRenderList (live=1), renderEntities / renderParticles / renderHand — and nothing else
+const probeHand = { ...hand };
+// probe=manager: the page draws only the manager's own render list everywhere (the game's case: a few consistently
+// shaped render objects; the static test objects come in many shapes and would make the renderer's property accesses
+// megamorphic)
+const probeManagerOnly = P.get('probe') === 'manager';
+window.__allocLoop = (n) => {
+  const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+  setupCtx(W, H);
+  for (let i = 0; i < n; i++) {
+    if (i % 6 === 0) particles.spawnBlockHit(-3, GROUND - 1, -1, 2, BLOCK.GRASS_BLOCK);
+    if (i % 90 === 0) particles.spawnBlockBreak(-6, GROUND, -5, BLOCK.STONE);
+    particles.update(1 / 60);
+    let list = renderList;
+    if (manager) {
+      manager.update(1 / 60);
+      const own = manager.getRenderList();
+      if (probeManagerOnly) list = own;
+    }
+    probeHand.swing = (i % 20) / 20;
+    baseState(0, 0, W, H);
+    er.renderEntities(ctx, list);
+    baseState(0, 0, W, H);
+    er.renderParticles(ctx, particles.getRenderData());
+    er.renderHand(ctx, probeHand);
+  }
+  return n;
+};
+// benchmark: N frames of renderEntities + renderParticles with every item copied `mult` times
+window.__bench = async (n = 120, mult = 1) => {
+  const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+  const list = [];
+  for (let m = 0; m < mult; m++) for (const e of entities) list.push(e.kind === 'item' ? { ...e, x: e.x + (m % 8) * 0.13, z: e.z - Math.floor(m / 8) * 4 } : e);
+  setupCtx(W, H);
+  const px = new Uint8Array(4);
+  const times = [];
+  for (let i = 0; i < n; i++) {
+    baseState(0, 0, W, H);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    const a = performance.now();
+    er.renderEntities(ctx, list);
+    er.renderParticles(ctx, particles.getRenderData());
+    er.renderHand(ctx, hand);
+    times.push(performance.now() - a);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  }
+  times.sort((p, q) => p - q);
+  return { items: list.length, instances: er.stats.instances, draws: er.stats.drawCalls, avgCpuMs: +(times.reduce((p, q) => p + q, 0) / n).toFixed(3), p95: +times[Math.floor(n * 0.95)].toFixed(3) };
+};
+</script>
+</body>
+</html>

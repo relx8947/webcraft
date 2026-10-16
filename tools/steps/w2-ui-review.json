@@ -1,0 +1,23 @@
+[
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"move": [640, 360]},
+  {"key": "ControlLeft", "action": "down"},
+  {"key": "KeyE"},
+  {"sleep": 300},
+  {"eval": "({ctrlE: __game.ui.currentScreen})"},
+  {"key": "KeyE"},
+  {"sleep": 300},
+  {"key": "Escape"},
+  {"sleep": 300},
+  {"eval": "({ctrlEsc: __game.ui.currentScreen})"},
+  {"key": "ControlLeft", "action": "up"},
+  {"key": "Escape"},
+  {"sleep": 300},
+  {"key": "F5"},
+  {"sleep": 300},
+  {"eval": "(()=>{const c=document.querySelector('#ui-root .crosshair, #ui-root .hud-crosshair'); return {perspective: __game.perspective, crosshair: c ? getComputedStyle(c).display + '/' + getComputedStyle(c).visibility : 'none'}})()"},
+  {"key": "F5"},
+  {"key": "F5"},
+  {"sleep": 300},
+  {"eval": "(()=>{const c=document.querySelector('#ui-root .crosshair, #ui-root .hud-crosshair'); return {perspective: __game.perspective, crosshair: c ? getComputedStyle(c).display + '/' + getComputedStyle(c).visibility : 'none'}})()"}
+]

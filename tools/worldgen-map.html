@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebCraft worldgen map</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; background: #1b1d22; color: #ddd; font: 13px/1.35 system-ui, "Microsoft YaHei", sans-serif; }
+  #bar { padding: 6px 10px; background: #111317; border-bottom: 1px solid #333; white-space: nowrap; overflow: hidden; }
+  #bar b { color: #fff; }
+  #wrap { display: flex; gap: 10px; padding: 10px; align-items: flex-start; flex-wrap: wrap; }
+  canvas { image-rendering: pixelated; background: #000; display: block; }
+  .panel { display: flex; flex-direction: column; gap: 4px; }
+  .cap { color: #aaa; }
+  #legend { display: grid; grid-template-columns: repeat(2, auto); gap: 2px 14px; font-size: 12px; }
+  #legend span i { display: inline-block; width: 11px; height: 11px; margin-right: 5px; vertical-align: -1px; border: 1px solid #0006; }
+  pre { margin: 0; font: 12px/1.3 Consolas, monospace; color: #cfd; }
+</style>
+</head>
+<body>
+<div id="bar">loading…</div>
+<div id="wrap"></div>
+<script type="module">
+// World generation viewer. URL parameters:
+//   seed=text|number (default 12345)   x, z = centre (default 0,0)   type=flat
+//   mode=map (default): shaded surface map (size=1024 blocks) + labelled biome map + cave/ore cross-section
+//        (sections=0 hides it, contours=1 adds 16-block contour lines, bsize = biome map pixels)
+//   mode=section: slices z=z (along x) and x=x (along z), width=512, with an ore histogram per y band
+//   mode=overview: 2D samples over size*step blocks (size=1000, step=8; relief=1 colours land by height)
+//   mode=view: CPU raymarched 3D preview; yaw/pitch (deg), dist/up (camera offset from the target) or
+//        cx/cy/cz (eye), radius (chunks), far, w/h; gallery=oak,large_oak,birch,tall_birch,spruce,pine
+// window.__done is set when rendering has finished (for tools/harness.mjs --wait-for).
+import { WorldGenerator, BIOMES, parseSeed } from '../src/world/worldgen.js';
+import { BLOCK, BLOCKS } from '../src/world/registry.js';
+
+const P = new URLSearchParams(location.search);
+const seedText = P.get('seed') ?? '12345';
+const seed = parseSeed(seedText);
+const mode = P.get('mode') ?? 'map';
+const CX = Number(P.get('x') ?? 0);
+const CZ = Number(P.get('z') ?? 0);
+const bar = document.getElementById('bar');
+const wrap = document.getElementById('wrap');
+
+// ---------------------------------------------------------------------------
+// Worker pool
+// ---------------------------------------------------------------------------
+const NW = Math.max(2, Math.min(16, (navigator.hardwareConcurrency || 8) - 1));
+const workers = [];
+let nextId = 1;
+const pending = new Map();
+function makeWorkers() {
+  const ready = [];
+  for (let i = 0; i < NW; i++) {
+    const w = new Worker(new URL('./worldgen-map-worker.mjs', import.meta.url), { type: 'module' });
+    ready.push(new Promise((res, rej) => {
+      w.onmessage = (ev) => {
+        const m = ev.data;
+        if (m.type === 'ready') { res(); return; }
+        if (m.type === 'error') { console.error('worker error: ' + m.message); rej(new Error(m.message)); return; }
+        const p = pending.get(m.id);
+        if (p) { pending.delete(m.id); p(m.out); }
+      };
+    }));
+    w.postMessage({ type: 'init', seed, worldType: P.get('type') || 'default' });
+    workers.push(w);
+  }
+  return Promise.all(ready);
+}
+let rr = 0;
+function job(type, chunks) {
+  const id = nextId++;
+  const w = workers[rr++ % workers.length];
+  return new Promise((res) => { pending.set(id, res); w.postMessage({ type, id, chunks }); });
+}
+async function runChunks(type, list, batch, onResult) {
+  const jobs = [];
+  for (let i = 0; i < list.length; i += batch) {
+    jobs.push(job(type, list.slice(i, i + batch)).then((out) => { for (const o of out) onResult(o); }));
+  }
+  await Promise.all(jobs);
+}
+
+// ---------------------------------------------------------------------------
+// Colours
+// ---------------------------------------------------------------------------
+const COL = new Array(256).fill(null);
+const set = (name, rgb) => { COL[BLOCK[name.toUpperCase()]] = rgb; };
+set('stone', [128, 128, 128]); set('dirt', [134, 96, 67]); set('grass_block', [255, 255, 255]);
+set('sand', [222, 210, 160]); set('gravel', [134, 126, 122]); set('sandstone', [214, 200, 148]);
+set('snowy_grass_block', [240, 247, 250]); set('snow_block', [244, 250, 255]); set('ice', [150, 185, 245]);
+set('water', [50, 90, 210]); set('lava', [230, 90, 20]); set('clay', [160, 166, 179]);
+set('bedrock', [60, 60, 60]); set('oak_log', [110, 85, 50]); set('birch_log', [215, 212, 200]);
+set('spruce_log', [75, 55, 35]); set('oak_leaves', [255, 255, 255]); set('birch_leaves', [128, 167, 85]);
+set('spruce_leaves', [97, 153, 97]); set('cactus', [80, 125, 45]); set('dead_bush', [140, 105, 60]);
+set('sugar_cane', [150, 200, 100]); set('short_grass', [255, 255, 255]); set('fern', [255, 255, 255]);
+set('dandelion', [250, 230, 40]); set('poppy', [220, 30, 30]); set('cornflower', [70, 110, 230]);
+set('oxeye_daisy', [240, 240, 230]); set('brown_mushroom', [150, 110, 80]); set('red_mushroom', [210, 40, 40]);
+set('pumpkin', [230, 140, 30]); set('granite', [155, 106, 89]); set('diorite', [190, 190, 192]);
+set('andesite', [136, 136, 138]); set('coal_ore', [30, 30, 30]); set('iron_ore', [216, 175, 147]);
+set('gold_ore', [250, 220, 50]); set('diamond_ore', [80, 240, 230]); set('redstone_ore', [255, 20, 20]);
+set('lapis_ore', [30, 60, 220]); set('oak_log_x', [110, 85, 50]); set('oak_log_z', [110, 85, 50]);
+for (let i = 0; i < 256; i++) if (!COL[i]) COL[i] = [255, 0, 255];
+const TINT_GRASS = new Set([BLOCK.GRASS_BLOCK, BLOCK.SHORT_GRASS, BLOCK.FERN, BLOCK.SUGAR_CANE]);
+const TINT_FOLIAGE = new Set([BLOCK.OAK_LEAVES]);
+
+function unpack(p) { return [p & 255, (p >> 8) & 255, (p >> 16) & 255]; }
+
+// ---------------------------------------------------------------------------
+// Map mode
+// ---------------------------------------------------------------------------
+async function mapMode() {
+  const S = Number(P.get('size') ?? 1024);
+  const half = S / 2;
+  const x0 = Math.floor((CX - half) / 16) * 16;
+  const z0 = Math.floor((CZ - half) / 16) * 16;
+  const NC = S / 16;
+  const topY = new Uint8Array(S * S);
+  const groundY = new Uint8Array(S * S);
+  const top = new Uint8Array(S * S);
+  const ground = new Uint8Array(S * S);
+  const depth = new Uint8Array(S * S);
+  const biome = new Uint8Array(S * S);
+  const grass = new Uint32Array(S * S);
+  const foliage = new Uint32Array(S * S);
+  const list = [];
+  for (let j = 0; j < NC; j++) for (let i = 0; i < NC; i++) list.push([x0 / 16 + i, z0 / 16 + j]);
+  let done = 0;
+  let msSum = 0;
+  let msMax = 0;
+  const t0 = performance.now();
+  await runChunks('map', list, 16, (o) => {
+    const ox = o.cx * 16 - x0;
+    const oz = o.cz * 16 - z0;
+    for (let lz = 0; lz < 16; lz++) {
+      for (let lx = 0; lx < 16; lx++) {
+        const c = (lz << 4) | lx;
+        const k = (oz + lz) * S + ox + lx;
+        topY[k] = o.topY[c]; groundY[k] = o.groundY[c]; top[k] = o.top[c]; ground[k] = o.ground[c];
+        depth[k] = o.depth[c]; biome[k] = o.biome[c]; grass[k] = o.grass[c]; foliage[k] = o.foliage[c];
+      }
+    }
+    msSum += o.ms; msMax = Math.max(msMax, o.ms);
+    if (++done % 256 === 0) bar.textContent = `generating ${done}/${list.length}`;
+  });
+  const wall = performance.now() - t0;
+
+  // --- shaded surface map ---
+  const cv = document.createElement('canvas');
+  cv.width = S; cv.height = S;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(S, S);
+  const d = img.data;
+  const L = [-0.55, 0.65, -0.52];
+  const ln = Math.hypot(...L); L[0] /= ln; L[1] /= ln; L[2] /= ln;
+  const H = (x, z) => topY[Math.min(S - 1, Math.max(0, z)) * S + Math.min(S - 1, Math.max(0, x))];
+  const contours = P.get('contours') === '1';
+  for (let z = 0; z < S; z++) {
+    for (let x = 0; x < S; x++) {
+      const k = z * S + x;
+      const id = top[k];
+      let c;
+      const isWater = id === BLOCK.WATER;
+      const base = isWater ? ground[k] : id;
+      c = COL[base].slice();
+      if (TINT_GRASS.has(base)) { const t = unpack(grass[k]); c = [c[0] * t[0] / 255 * 0.9, c[1] * t[1] / 255 * 0.9, c[2] * t[2] / 255 * 0.9]; }
+      else if (TINT_FOLIAGE.has(base)) { const t = unpack(foliage[k]); c = [t[0] * 0.78, t[1] * 0.78, t[2] * 0.78]; }
+      else if (base === BLOCK.BIRCH_LEAVES || base === BLOCK.SPRUCE_LEAVES) c = [c[0] * 0.8, c[1] * 0.8, c[2] * 0.8];
+      // hillshade
+      const dx = (H(x + 1, z) - H(x - 1, z)) * 0.5;
+      const dz = (H(x, z + 1) - H(x, z - 1)) * 0.5;
+      const nl = Math.hypot(dx, 1, dz);
+      let sh = (-dx * L[0] + L[1] - dz * L[2]) / nl;
+      sh = 0.45 + 0.75 * Math.max(0, sh);
+      const hy = topY[k];
+      sh *= 0.9 + 0.2 * Math.min(1, Math.max(0, (hy - 60) / 140));
+      if (isWater) {
+        // floor seen through water
+        const dep = depth[k];
+        const a = Math.min(0.93, 0.45 + dep * 0.045);
+        const wc = [38 - Math.min(dep, 30) * 0.6, 78 - Math.min(dep, 30) * 1.4, 200 - Math.min(dep, 30) * 2.6];
+        const gsh = 0.75;
+        c = [c[0] * gsh * (1 - a) + wc[0] * a, c[1] * gsh * (1 - a) + wc[1] * a, c[2] * gsh * (1 - a) + wc[2] * a];
+      } else {
+        c = [c[0] * sh, c[1] * sh, c[2] * sh];
+      }
+      if (id === BLOCK.ICE) c = [c[0] * 0.5 + 105, c[1] * 0.5 + 125, c[2] * 0.5 + 135];
+      if (contours && !isWater && (hy % 16 === 0) && (H(x + 1, z) % 16 !== 0 || H(x, z + 1) % 16 !== 0)) c = [c[0] * 0.75, c[1] * 0.75, c[2] * 0.75];
+      d[k * 4] = c[0]; d[k * 4 + 1] = c[1]; d[k * 4 + 2] = c[2]; d[k * 4 + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  // origin marker + spawn marker
+  const gen = new WorldGenerator(seed);
+  const sp = gen.findSpawn();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(-x0, -z0, 5, 0, Math.PI * 2); ctx.stroke();
+  ctx.strokeStyle = '#f33'; ctx.beginPath(); ctx.arc(sp.x - x0, sp.z - z0, 7, 0, Math.PI * 2); ctx.stroke();
+
+  // --- biome map (half resolution) with labels ---
+  const BS = Math.min(S, Number(P.get('bsize') ?? 512));
+  const f = S / BS;
+  const bc = document.createElement('canvas');
+  bc.width = BS; bc.height = BS;
+  const bctx = bc.getContext('2d');
+  const bimg = bctx.createImageData(BS, BS);
+  const counts = new Map();
+  const cent = new Map();
+  for (let z = 0; z < BS; z++) {
+    for (let x = 0; x < BS; x++) {
+      const k = Math.floor(z * f) * S + Math.floor(x * f);
+      const b = BIOMES[biome[k]];
+      const m = b.mapColor;
+      const kk = (z * BS + x) * 4;
+      const hy = topY[k];
+      const s = 0.8 + 0.3 * Math.min(1, Math.max(0, (hy - 62) / 120));
+      bimg.data[kk] = ((m >> 16) & 255) * s; bimg.data[kk + 1] = ((m >> 8) & 255) * s; bimg.data[kk + 2] = (m & 255) * s; bimg.data[kk + 3] = 255;
+      counts.set(b.id, (counts.get(b.id) || 0) + 1);
+    }
+  }
+  bctx.putImageData(bimg, 0, 0);
+  // label connected regions (coarse flood fill on a 1/4 grid)
+  const G = 4, GW = BS / G;
+  const lab = new Int32Array(GW * GW).fill(-1);
+  const bAt = (gx, gz) => biome[Math.floor((gz * G + G / 2) * f) * S + Math.floor((gx * G + G / 2) * f)];
+  bctx.font = 'bold 12px "Microsoft YaHei", sans-serif'; bctx.textAlign = 'center';
+  for (let gz = 0; gz < GW; gz++) for (let gx = 0; gx < GW; gx++) {
+    if (lab[gz * GW + gx] >= 0) continue;
+    const b = bAt(gx, gz);
+    const stack = [[gx, gz]]; lab[gz * GW + gx] = 1;
+    let n = 0, sx = 0, sz = 0;
+    while (stack.length) {
+      const [a, c] = stack.pop(); n++; sx += a; sz += c;
+      for (const [u, v] of [[a + 1, c], [a - 1, c], [a, c + 1], [a, c - 1]]) {
+        if (u < 0 || v < 0 || u >= GW || v >= GW || lab[v * GW + u] >= 0 || bAt(u, v) !== b) continue;
+        lab[v * GW + u] = 1; stack.push([u, v]);
+      }
+    }
+    if (n > 60) {
+      const px = (sx / n) * G + G / 2, pz = (sz / n) * G + G / 2;
+      bctx.fillStyle = '#000b'; bctx.fillText(BIOMES[b].displayName, px + 1, pz + 1);
+      bctx.fillStyle = '#fff'; bctx.fillText(BIOMES[b].displayName, px, pz);
+    }
+  }
+  const panelA = document.createElement('div'); panelA.className = 'panel';
+  panelA.append(cv);
+  const capA = document.createElement('div'); capA.className = 'cap';
+  capA.textContent = `surface ${S}×${S} blocks, x ${x0}..${x0 + S}, z ${z0}..${z0 + S}  (white ring = origin, red = spawn ${sp.x},${sp.y},${sp.z})`;
+  panelA.append(capA);
+  const panelB = document.createElement('div'); panelB.className = 'panel';
+  panelB.append(bc);
+  const legend = document.createElement('div'); legend.id = 'legend';
+  const tot = BS * BS;
+  for (const [id, n] of [...counts].sort((a, b) => b[1] - a[1])) {
+    const b = BIOMES[id];
+    const sp2 = document.createElement('span');
+    sp2.innerHTML = `<i style="background:#${b.mapColor.toString(16).padStart(6, '0')}"></i>${b.displayName} ${b.name} ${(100 * n / tot).toFixed(1)}%`;
+    legend.append(sp2);
+  }
+  panelB.append(legend);
+  // height histogram
+  let maxH = 0, sumH = 0, landN = 0;
+  for (let k = 0; k < S * S; k++) { if (topY[k] > maxH) maxH = topY[k]; if (top[k] !== BLOCK.WATER && top[k] !== BLOCK.ICE) { sumH += groundY[k]; landN++; } }
+  const stats = document.createElement('pre');
+  stats.textContent = `chunks ${list.length}, workers ${NW}, wall ${(wall / 1000).toFixed(1)} s\n` +
+    `per chunk avg ${(msSum / list.length).toFixed(2)} ms, max ${msMax.toFixed(1)} ms\n` +
+    `max height ${maxH}, land ${(100 * landN / (S * S)).toFixed(1)}%, mean land height ${(sumH / landN).toFixed(1)}`;
+  panelB.append(stats);
+  const topRow = document.createElement('div');
+  topRow.style.cssText = 'display:flex;gap:10px;align-items:flex-start;flex-wrap:nowrap';
+  topRow.append(panelA, panelB);
+  wrap.append(topRow);
+  if (P.get('sections') !== '0') {
+    const row = document.createElement('div');
+    row.className = 'panel';
+    row.style.width = '100%';
+    wrap.append(row);
+    await renderSections(row, { W: S, zs: CZ, xs: CX, scale: 1, both: false, histogram: false });
+  }
+  bar.innerHTML = `<b>WebCraft worldgen</b> seed "${seedText}" (${seed}) — surface map, biomes, cross-section`;
+}
+
+// ---------------------------------------------------------------------------
+// Sections: vertical slices through caves / ores (+ per-band ore histogram)
+// ---------------------------------------------------------------------------
+const SECTION_LEGEND = [
+  ['stone', 'stone'], ['granite', 'granite'], ['diorite', 'diorite'], ['andesite', 'andesite'], ['dirt', 'dirt'],
+  ['gravel', 'gravel'], ['coal_ore', 'coal'], ['iron_ore', 'iron'], ['gold_ore', 'gold'], ['redstone_ore', 'redstone'],
+  ['diamond_ore', 'diamond'], ['lapis_ore', 'lapis'], ['lava', 'lava'], ['water', 'water'], ['bedrock', 'bedrock'],
+];
+
+/** Render slices z = zs (along x) and optionally x = xs (along z); W blocks wide, `scale` px per block. */
+async function renderSections(parent, { W, zs, xs, scale = 2, both = true, histogram = true }) {
+  const sx0 = Math.floor((xs - W / 2) / 16) * 16;
+  const sz0 = Math.floor((zs - W / 2) / 16) * 16;
+  const list = [];
+  const seen = new Set();
+  const add = (cx, cz) => { const k = cx + ',' + cz; if (!seen.has(k)) { seen.add(k); list.push([cx, cz]); } };
+  for (let i = 0; i < W / 16; i++) {
+    add(sx0 / 16 + i, Math.floor(zs / 16));
+    if (both) add(Math.floor(xs / 16), sz0 / 16 + i);
+  }
+  const chunks = new Map();
+  await runChunks('full', list, 4, (o) => chunks.set(o.cx + ',' + o.cz, o.blocks));
+  const get = (x, y, z) => chunks.get(Math.floor(x / 16) + ',' + Math.floor(z / 16))[(y << 8) | ((z & 15) << 4) | (x & 15)];
+  function slice(label, fn) {
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = 256;
+    cv.style.width = (W * scale) + 'px'; cv.style.height = (256 * scale) + 'px';
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(W, 256);
+    for (let i = 0; i < W; i++) {
+      let top = 255;
+      while (top > 0 && fn(i, top) === BLOCK.AIR) top--;
+      for (let y = 0; y < 256; y++) {
+        const id = fn(i, y);
+        let c;
+        if (id === BLOCK.AIR) c = y > top ? [150, 190, 245] : [12, 12, 16]; // sky vs cave air
+        else c = COL[id];
+        if (id === BLOCK.STONE) c = [118, 118, 118];
+        const k = ((255 - y) * W + i) * 4;
+        img.data[k] = c[0]; img.data[k + 1] = c[1]; img.data[k + 2] = c[2]; img.data[k + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    // height ticks every 32 blocks
+    ctx.fillStyle = '#fff8';
+    for (let y = 0; y <= 256; y += 32) ctx.fillRect(0, 255 - y, 4, 1);
+    const pnl = document.createElement('div'); pnl.className = 'panel';
+    const cap = document.createElement('div'); cap.className = 'cap'; cap.textContent = label + ' (ticks every 32 blocks, black = cave air)';
+    pnl.append(cv, cap);
+    return pnl;
+  }
+  parent.append(slice(`slice z=${zs}, x ${sx0}..${sx0 + W}`, (i, y) => get(sx0 + i, y, zs)));
+  if (both) parent.append(slice(`slice x=${xs}, z ${sz0}..${sz0 + W}`, (i, y) => get(xs, y, sz0 + i)));
+  const legend = document.createElement('div'); legend.id = 'legend';
+  legend.style.gridTemplateColumns = 'repeat(8, auto)';
+  for (const [name, label] of SECTION_LEGEND) {
+    const c = name === 'stone' ? [118, 118, 118] : COL[BLOCK[name.toUpperCase()]];
+    const sp = document.createElement('span');
+    sp.innerHTML = `<i style="background:rgb(${c.join(',')})"></i>${label}`;
+    legend.append(sp);
+  }
+  parent.append(legend);
+  if (!histogram) return;
+  const ores = ['coal_ore', 'iron_ore', 'gold_ore', 'redstone_ore', 'diamond_ore', 'lapis_ore', 'granite', 'diorite', 'andesite', 'dirt', 'gravel', 'lava'];
+  const hist = ores.map(() => new Float64Array(32));
+  for (const blk of chunks.values()) {
+    for (let y = 0; y < 256; y++) {
+      for (let c = 0; c < 256; c++) {
+        const oi = ores.indexOf(BLOCKS[blk[(y << 8) | c]].name);
+        if (oi >= 0) hist[oi][y >> 3]++;
+      }
+    }
+  }
+  const n = chunks.size;
+  let maxBand = 0;
+  for (const h of hist) for (let band = 0; band < 32; band++) if (h[band] > 0) maxBand = Math.max(maxBand, band);
+  let txt = 'blocks per chunk by y band (' + n + ' chunks)\n   y ' + ores.map((o) => o.replace('_ore', '').slice(0, 7).padStart(8)).join('') + '\n';
+  for (let band = maxBand; band >= 0; band--) {
+    txt += String(band * 8).padStart(4) + ' ' + hist.map((h) => (h[band] / n).toFixed(1).padStart(8)).join('') + '\n';
+  }
+  txt += 'total' + hist.map((h) => (h.reduce((x, y) => x + y) / n).toFixed(1).padStart(8)).join('');
+  const pre = document.createElement('pre'); pre.textContent = txt;
+  parent.append(pre);
+}
+
+async function sectionMode() {
+  await renderSections(wrap, { W: Number(P.get('width') ?? 512), zs: CZ, xs: CX, scale: 2 });
+  bar.innerHTML = `<b>WebCraft worldgen</b> seed "${seedText}" (${seed}) — sections`;
+}
+
+// ---------------------------------------------------------------------------
+// Overview mode: 2D estimate over a huge area (one sample per `step` blocks)
+// ---------------------------------------------------------------------------
+async function overviewMode() {
+  const N = Number(P.get('size') ?? 1000);
+  const step = Number(P.get('step') ?? 8);
+  const x0 = CX - (N / 2) * step;
+  const z0 = CZ - (N / 2) * step;
+  const H = new Float32Array(N * N);
+  const Bm = new Uint8Array(N * N);
+  const rows = [];
+  for (let j = 0; j < N; j++) rows.push({ x0, z: z0 + j * step, step, w: N, row: j });
+  await runChunks('overview', rows, 8, (o) => { H.set(o.h, o.row * N); Bm.set(o.b, o.row * N); });
+  const cv = document.createElement('canvas'); cv.width = N; cv.height = N;
+  const ctx = cv.getContext('2d'); const img = ctx.createImageData(N, N);
+  const L = [-0.55, 0.65, -0.52]; const ln = Math.hypot(...L);
+  let maxH = 0;
+  const counts = new Map();
+  const relief = P.get('relief') === '1';
+  for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) {
+    const k = z * N + x;
+    const h = H[k]; if (h > maxH) maxH = h;
+    const b = BIOMES[Bm[k]];
+    counts.set(b.id, (counts.get(b.id) || 0) + 1);
+    let c = [(b.mapColor >> 16) & 255, (b.mapColor >> 8) & 255, b.mapColor & 255];
+    const hx = (H[z * N + Math.min(N - 1, x + 1)] - H[z * N + Math.max(0, x - 1)]) / (2 * step);
+    const hz = (H[Math.min(N - 1, z + 1) * N + x] - H[Math.max(0, z - 1) * N + x]) / (2 * step);
+    let sh = (-hx * L[0] + L[1] - hz * L[2]) / ln / Math.hypot(hx, 1, hz);
+    sh = 0.5 + 0.7 * Math.max(0, sh);
+    if (relief && h >= 62) { const t = Math.min(1, (h - 62) / 140); c = [70 + 185 * t, 130 + 115 * t, 60 + 190 * t]; }
+    if (h < 62) { const dpt = Math.min(1, (62 - h) / 35); c = [c[0] * (1 - 0.5 * dpt), c[1] * (1 - 0.5 * dpt), c[2] * (1 - 0.3 * dpt)]; sh = 1; }
+    img.data[k * 4] = c[0] * sh; img.data[k * 4 + 1] = c[1] * sh; img.data[k * 4 + 2] = c[2] * sh; img.data[k * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.arc(-x0 / step, -z0 / step, 4, 0, Math.PI * 2); ctx.stroke();
+  const panel = document.createElement('div'); panel.className = 'panel'; panel.append(cv);
+  const legend = document.createElement('div'); legend.id = 'legend';
+  for (const [id, n] of [...counts].sort((a, b) => b[1] - a[1])) {
+    const b = BIOMES[id]; const sp2 = document.createElement('span');
+    sp2.innerHTML = `<i style="background:#${b.mapColor.toString(16).padStart(6, '0')}"></i>${b.displayName} ${b.name} ${(100 * n / (N * N)).toFixed(1)}%`;
+    legend.append(sp2);
+  }
+  const info = document.createElement('pre');
+  info.textContent = `area ${N * step}×${N * step} blocks (step ${step}), max 2D height ${maxH.toFixed(0)}`;
+  const side = document.createElement('div'); side.className = 'panel'; side.append(legend, info);
+  wrap.append(panel, side);
+  bar.innerHTML = `<b>WebCraft worldgen</b> seed "${seedText}" (${seed}) — overview`;
+}
+
+// ---------------------------------------------------------------------------
+// View mode: 3D raymarched preview (own workers; each generates the area and renders row bands)
+// ---------------------------------------------------------------------------
+async function viewMode() {
+  const W = Number(P.get('w') ?? 1280);
+  const H = Number(P.get('h') ?? 720);
+  const radius = Number(P.get('radius') ?? 7);
+  const yaw = Number(P.get('yaw') ?? 0) * Math.PI / 180;
+  const pitch = Number(P.get('pitch') ?? -18) * Math.PI / 180;
+  const gen = new WorldGenerator(seed);
+  const gallery = P.has('gallery') ? P.get('gallery').split(',') : null;
+  let cam;
+  if (P.has('cx')) {
+    cam = { x: Number(P.get('cx')), y: Number(P.get('cy')), z: Number(P.get('cz')) };
+  } else {
+    const dist = Number(P.get('dist') ?? 70);
+    const up = Number(P.get('up') ?? 35);
+    const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+    const x = CX - fx * dist, z = CZ - fz * dist;
+    const h = gallery ? 64 : Math.max(62, gen.sampleColumn(x, z).height, gen.sampleColumn(CX, CZ).height);
+    cam = { x, y: h + up, z };
+  }
+  Object.assign(cam, { yaw, pitch, fov: Number(P.get('fov') ?? 70), far: Number(P.get('far') ?? radius * 16) });
+  const NV = Math.max(2, Math.min(Number(P.get('workers') ?? 8), (navigator.hardwareConcurrency || 8) - 1));
+  const vw = [];
+  const ready = [];
+  for (let i = 0; i < NV; i++) {
+    const w = new Worker(new URL('./worldgen-view-worker.mjs', import.meta.url), { type: 'module' });
+    ready.push(new Promise((res) => { w._ready = res; }));
+    w.onmessage = (ev) => {
+      const m = ev.data;
+      if (m.type === 'ready') { w._ready(); return; }
+      if (m.type === 'error') { console.error('view worker: ' + m.message); return; }
+      const p = pending.get(m.id); if (p) { pending.delete(m.id); p(m.out); }
+    };
+    w.postMessage({ type: 'init', seed });
+    vw.push(w);
+  }
+  await Promise.all(ready);
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  wrap.append(cv);
+  const band = Math.ceil(H / (NV * 4));
+  const jobs = [];
+  const t0 = performance.now();
+  let k = 0;
+  for (let r0 = 0; r0 < H; r0 += band) {
+    const r1 = Math.min(H, r0 + band);
+    const id = nextId++;
+    const w = vw[k++ % NV];
+    jobs.push(new Promise((res) => {
+      pending.set(id, (out) => {
+        ctx.putImageData(new ImageData(out.px, W, out.row1 - out.row0), 0, out.row0);
+        res();
+      });
+      w.postMessage({ type: 'view', id, cam, radius, width: W, height: H, row0: r0, row1: r1, gallery });
+    }));
+  }
+  await Promise.all(jobs);
+  for (const w of vw) w.terminate();
+  const b = gen.getBiome(CX, CZ);
+  bar.innerHTML = `<b>WebCraft worldgen</b> seed "${seedText}" — view cam ${cam.x.toFixed(0)},${cam.y.toFixed(0)},${cam.z.toFixed(0)} yaw ${(yaw * 180 / Math.PI).toFixed(0)} pitch ${(pitch * 180 / Math.PI).toFixed(0)} — target biome ${b.displayName} — ${((performance.now() - t0) / 1000).toFixed(1)} s`;
+}
+
+const modes = { map: mapMode, section: sectionMode, overview: overviewMode, view: viewMode };
+(mode === 'view' ? Promise.resolve() : makeWorkers()).then(() => (modes[mode] ?? mapMode)()).then(() => { window.__done = true; }).catch((e) => {
+  console.error(e);
+  bar.textContent = 'error: ' + e.message;
+  window.__done = true;
+});
+</script>
+</body>
+</html>

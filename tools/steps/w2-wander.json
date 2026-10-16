@@ -1,0 +1,9 @@
+[
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"eval": "(()=>{const g=__game,p=g.player; g.debug.setMode('creative'); g.debug.setTime(6000); const ms=g.entities.list.filter(e=>e.type==='mob'&&!e.removed&&!e.frozen&&Math.hypot(e.x-p.x,e.z-p.z)<64); window.__start=new Map(ms.map(e=>[e,[e.x,e.y,e.z]])); return {tracked:ms.length, types:[...new Set(ms.map(e=>e.mobType))]}})()"},
+  {"sleep": 30000},
+  {"eval": "(()=>{const g=__game; const d=[]; let fell=0, water=0; for (const [e,[x,y,z]] of window.__start) { if (e.removed) continue; d.push(Math.hypot(e.x-x,e.z-z)); if (e.y < y-4) fell++; if (e.inWater) water++; } d.sort((a,b)=>a-b); return {alive:d.length, movedOver1:d.filter(v=>v>1).length, still:d.filter(v=>v<=1).length, median:+d[d.length>>1].toFixed(1), p90:+d[Math.floor(d.length*0.9)].toFixed(1), max:+d[d.length-1].toFixed(1), droppedOver4:fell, inWater:water}})()"},
+  {"eval": "(async()=>{const g=__game,d=g.debug,p=g.player; const m=[...window.__start.keys()].filter(e=>!e.removed).sort((a,b)=>Math.hypot(a.x-p.x,a.z-p.z)-Math.hypot(b.x-p.x,b.z-p.z))[0]; await d.tp(m.x+5, null, m.z+5); d.lookAt(m.x, m.y+0.5, m.z); d.hideHud(true); await d.frames(20); return m.mobType})()"},
+  {"sleep": 1500},
+  {"screenshot": "tools/out/w2int/animals-wandering.png"}
+]

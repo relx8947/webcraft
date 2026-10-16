@@ -1,0 +1,4 @@
+[
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"eval": "(()=>{const ui=__game.ui; const r={max:ui.maxScale, scale:ui.scale}; ui.openOptions(()=>ui.closeScreen(), true); const b=ui.screen.guiBtn; const labels=[b.label]; for(let i=0;i<8;i++){ b.el.click(); labels.push(b.label+'/'+ui.scale); if(__game.settings.guiScale===0) break; } ui.closeScreen(); return {...r, labels}})()"}
+]

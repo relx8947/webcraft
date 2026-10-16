@@ -1,0 +1,18 @@
+[
+  {"waitFor": "window.__ready", "timeout": 90000},
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"move": [640, 360]},
+  {"eval": "(()=>{const g=__game,d=g.debug,p=g.player; d.give('flint_and_steel', 1); const x=Math.floor(p.x)+3, z=Math.floor(p.z); const y=Math.floor(p.y); for (let dx=1; dx<=2; dx++) for (let dy=0; dy<=2; dy++) d.setBlock(x-dx, y+dy, z, 'air'); d.setBlock(x, y-1, z, 'stone'); d.setBlock(x, y, z, 'tnt'); window.__tnt=[x,y,z]; p.setPosition(p.x, p.y, p.z); d.lookAt(x+0.5, y+0.5, z+0.5); return {t: d.target(), sel: p.getSelectedStack()}})()"},
+  {"sleep": 200},
+  {"click": [640, 360], "button": "right"},
+  {"sleep": 300},
+  {"eval": "(()=>{const g=__game,[x,y,z]=window.__tnt; return {block: g.debug.blockName(x,y,z), ents: g.entities.list.map(e=>e.type), fs: g.player.getSelectedStack()}})()"},
+  {"eval": "(()=>{const p=__game.player; p.setPosition(p.x-12, p.y, p.z); __game.debug.lookAt(...window.__tnt.map((v,i)=>v+0.5)); return 1})()"},
+  {"sleep": 1500},
+  {"screenshot": "tools/out/integ-tnt-lit.png"},
+  {"sleep": 2700},
+  {"screenshot": "tools/out/integ-tnt-boom.png"},
+  {"sleep": 1500},
+  {"eval": "(()=>{const g=__game,[x,y,z]=window.__tnt; let air=0; for (let dx=-3;dx<=3;dx++) for (let dy=-3;dy<=3;dy++) for (let dz=-3;dz<=3;dz++) if (g.world.getBlock(x+dx,y+dy,z+dz)===0) air++; return {air, ents: g.entities.count, health: g.player.health}})()"},
+  {"screenshot": "tools/out/integ-tnt-crater.png"}
+]

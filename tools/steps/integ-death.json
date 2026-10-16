@@ -1,0 +1,63 @@
+[
+ {
+  "waitFor": "window.__ready",
+  "timeout": 90000
+ },
+ {
+  "eval": "__game.debug.waitIdle(30000)"
+ },
+ {
+  "eval": "(()=>{const d=__game.debug; d.give('cobblestone', 30); d.give('iron_pickaxe', 1); const p=__game.player; p.setPosition(p.x+3, p.y, p.z+3); return [p.x,p.y,p.z]})()"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "key": "Slash"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "type": "kill"
+ },
+ {
+  "key": "Enter"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "eval": "({screen: __game.ui.currentScreen, dead: __game.player.dead, msg: __game.player.deathMessage, ents: __game.entities.count, inv: __game.player.inventory.slots.filter(Boolean).length})"
+ },
+ {
+  "screenshot": "tools/out/integ-death.png"
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "eval": "(()=>{const b=[...document.querySelectorAll('#ui-root button')].map(e=>{const r=e.getBoundingClientRect(); return [e.textContent.trim(), Math.round(r.x+r.width/2), Math.round(r.y+r.height/2), e.disabled]}); return b})()"
+ },
+ {
+  "click": [
+   639,
+   426
+  ]
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "eval": "({screen: __game.ui.currentScreen, dead: __game.player.dead, health: __game.player.health, pos: [__game.player.x, __game.player.y, __game.player.z], spawn: __game.worldMeta.spawn, input: __game.input.enabled})"
+ },
+ {
+  "sleep": 2500
+ },
+ {
+  "eval": "({ents: __game.entities.count, inv: __game.player.inventory.slots.map((s,i)=>s?{i,id:s.id,n:s.count}:null).filter(Boolean)})"
+ },
+ {
+  "screenshot": "tools/out/integ-respawned.png"
+ }
+]

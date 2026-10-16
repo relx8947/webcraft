@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebCraft 音效测试 / audio test</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; background: #1d1f22; color: #e6e6e6; font: 13px/1.4 "Segoe UI", "Microsoft YaHei", sans-serif; }
+  body { padding: 12px 16px 40px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 18px 0 6px; color: #9fd37a; border-bottom: 1px solid #333; padding-bottom: 3px; }
+  .sub { color: #999; margin-bottom: 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  button { background: #3a3d42; color: #eee; border: 1px solid #555; border-radius: 3px; padding: 4px 9px; cursor: pointer; font: inherit; }
+  button:hover { background: #4b5057; }
+  button.primary { background: #2f5d2a; border-color: #4f8a45; }
+  button.primary:hover { background: #3b7334; }
+  label { color: #bbb; }
+  input[type=range] { vertical-align: middle; width: 120px; }
+  table.grid { border-collapse: collapse; }
+  table.grid td, table.grid th { padding: 2px 3px; text-align: center; }
+  table.grid th { color: #aaa; font-weight: normal; }
+  table.grid button { width: 64px; padding: 3px 0; }
+  #layout { display: flex; gap: 24px; flex-wrap: wrap; }
+  #pos { background: #121315; border: 1px solid #333; cursor: crosshair; }
+  #status { font-family: Consolas, monospace; color: #cfc; white-space: pre; min-height: 3.6em; }
+  #summary { font-family: Consolas, monospace; white-space: pre; margin: 6px 0; }
+  #summary.ok { color: #8f8; }
+  #summary.bad { color: #f88; }
+  #checks { display: grid; grid-template-columns: repeat(auto-fill, 232px); gap: 8px; }
+  body.big #checks { grid-template-columns: repeat(auto-fill, 472px); }
+  .card { background: #26292d; border: 1px solid #383c41; border-radius: 3px; padding: 4px; }
+  .card.bad { border-color: #c44; background: #3a2222; }
+  .card .t { display: flex; justify-content: space-between; font-family: Consolas, monospace; font-size: 11px; }
+  .card .t b { color: #fff; font-weight: 600; }
+  .card .m { font-family: Consolas, monospace; font-size: 10.5px; color: #aaa; }
+  .card canvas { display: block; image-rendering: pixelated; }
+  #music-card canvas { width: 100%; }
+</style>
+</head>
+<body>
+<h1>WebCraft 音效测试 <span style="color:#888;font-size:14px">audio.js — all sounds are synthesized (WebAudio)</span></h1>
+<div class="sub">点击任意按钮即可解锁音频。自检 (?selfcheck=1) 会把每个声音渲染到 OfflineAudioContext，统计峰值 / RMS 并绘制频谱图。</div>
+<div class="row">
+  <button id="unlock" class="primary">解锁音频 Unlock</button>
+  <label>音效 <input id="vol-sound" type="range" min="0" max="1" step="0.01" value="0.8"></label>
+  <label>音乐 <input id="vol-music" type="range" min="0" max="1" step="0.01" value="0.5"></label>
+  <label><input id="underwater" type="checkbox"> 水下 (underwater)</label>
+  <button id="spam">压力测试 (60 sounds)</button>
+  <button id="run-check">运行自检 Self-check</button>
+</div>
+
+<div id="layout">
+  <div>
+    <h2>命名音效 Named sounds</h2>
+    <div class="row" id="named" style="max-width:640px"></div>
+    <h2>方块音效 Block sounds (kind × material)</h2>
+    <table class="grid" id="blocks"></table>
+  </div>
+  <div>
+    <h2>音乐 Music</h2>
+    <div class="row">
+      <button id="music-start" class="primary">开始音乐 startMusic()</button>
+      <button id="music-now">立即播放一首 play now</button>
+      <label>seed <input id="seed" type="number" value="" placeholder="random" style="width:90px"></label>
+      <button id="music-stop">停止 stopMusic()</button>
+    </div>
+    <div id="status"></div>
+    <h2>位置音频 Positional (click the map)</h2>
+    <div class="row">
+      <select id="pos-sound"></select>
+      <label>yaw <input id="yaw" type="range" min="-180" max="180" step="1" value="0"> <span id="yaw-v">0°</span></label>
+    </div>
+    <canvas id="pos" width="300" height="300"></canvas>
+    <div class="sub">听者在中心（箭头为朝向，yaw 0 = 北 / −Z）。圆圈半径 8 / 16 方块。</div>
+  </div>
+</div>
+
+<h2>自检 Self-check (OfflineAudioContext)</h2>
+<div id="summary">未运行 / not run</div>
+<div id="checks"></div>
+<script>if (location.search.includes('big')) document.body.classList.add('big');</script>
+<script type="module" src="audio-test.mjs"></script>
+</body>
+</html>

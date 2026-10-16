@@ -1,0 +1,48 @@
+[
+ {
+  "log": "WORLD-1 regression: synchronous snapshot save survives an immediate page reload (real IndexedDB)"
+ },
+ {
+  "waitFor": "window.__game && window.__game.state === 'title'",
+  "timeout": 30000
+ },
+ {
+  "eval": "(async () => { const g = window.__game; for (const m of await g.listWorlds()) if (m.name === 'snap-test') await g.deleteWorld(m.id); const meta = await g.createWorld({ name: 'snap-test', seedText: '42', mode: 'creative' }); g.startWorld(meta); return meta.id; })()"
+ },
+ {
+  "waitFor": "window.__game.state === 'playing'",
+  "timeout": 60000
+ },
+ {
+  "eval": "(() => { const w = window.__game.world; let n = 0; for (let i = 0; i < 25; i++) { const cx = (i % 5) - 2, cz = Math.floor(i / 5) - 2; if (w.setBlock(cx * 16 + 5, 190, cz * 16 + 7, 57)) n++; } window.__game.worldMeta.time = 20000; return n; })()"
+ },
+ {
+  "eval": "(() => { const g = window.__game; g._setUnloadGuard?.(false); if (g._onBeforeUnload) window.removeEventListener('beforeunload', g._onBeforeUnload); setTimeout(() => { g.world.saveSnapshot(g.worldMeta); location.reload(); }, 0); return 'save + reload scheduled in one task'; })()"
+ },
+ {
+  "sleep": 1500
+ },
+ {
+  "waitFor": "window.__game && window.__game.state === 'title'",
+  "timeout": 30000
+ },
+ {
+  "eval": "(async () => { const g = window.__game; const m = (await g.listWorlds()).find((x) => x.name === 'snap-test'); if (!m) return 'world missing'; g.startWorld(m); return m.time; })()"
+ },
+ {
+  "waitFor": "window.__game.state === 'playing'",
+  "timeout": 60000
+ },
+ {
+  "eval": "window.__game.debug.waitIdle(30000)"
+ },
+ {
+  "eval": "(() => { const w = window.__game.world; let ok = 0; const bad = []; for (let i = 0; i < 25; i++) { const cx = (i % 5) - 2, cz = Math.floor(i / 5) - 2; const id = w.getBlock(cx * 16 + 5, 190, cz * 16 + 7); if (id === 57) ok++; else bad.push([cx, cz, id]); } return JSON.stringify({ ok, bad }); })()"
+ },
+ {
+  "eval": "(async () => { const { Storage } = await import('/src/world/storage.js'); const s = Storage.memory(); const a = await s.acquireWorldLock('lock-test'); const b = await s.acquireWorldLock('lock-test'); a.release(); await new Promise((r) => setTimeout(r, 50)); const c = await s.acquireWorldLock('lock-test'); const r = { first: !!a && a.supported, secondWhileHeld: b, afterRelease: !!c }; c && c.release(); return JSON.stringify(r); })()"
+ },
+ {
+  "eval": "(async () => { const g = window.__game; const id = g.worldMeta.id; await g.quitToTitle(); await g.deleteWorld(id); return 'cleaned up'; })()"
+ }
+]

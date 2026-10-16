@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebCraft renderer test</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; left: 6px; top: 4px; color: #fff; font: 12px/1.35 monospace; text-shadow: 1px 1px 0 #000;
+         white-space: pre; pointer-events: none; }
+  #cross { position: fixed; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; pointer-events: none; }
+  #cross:before, #cross:after { content: ''; position: absolute; background: rgba(255,255,255,0.8); }
+  #cross:before { left: 7px; top: 0; width: 2px; height: 16px; }
+  #cross:after { left: 0; top: 7px; width: 16px; height: 2px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">loading…</div>
+<div id="cross"></div>
+<script type="module">
+// Renderer test page (SPEC §9.3). URL parameters:
+//   x, y, z        eye position (default: overlooking the test map)     yaw, pitch   degrees (yaw 0 = north/-Z)
+//   time           time of day 0..1 (0 sunrise, .25 noon, .5 sunset, .75 midnight)   t   fixed animation clock (s)
+//   underwater=1 / lava=1   camera medium     select=x,y,z   selection outline    crack=0..9 (on the selection)
+//   rd             render distance (chunks, default 6)       tiles   tile radius (default from rd)
+//   fov            vertical FOV (deg)       filter=smooth|classic      aniso=N      clouds=0     smooth=0 (flat light)
+//   entities=mock|real|none   hand=1   hud=0   cross=0   bench=N (frames)   lost=1 (context loss/restore test)
+//   mesher=real    use src/world/mesher.js + lighting.js if available (integration check)
+import { Renderer } from '../src/render/renderer.js';
+import { computeDaylight } from '../src/config.js';
+import { BLOCK, getSelectionBox } from '../src/world/registry.js';
+import { TestWorld, SIZE, HEIGHT, placeholderTextures, MockEntityRenderer } from './render-testworld.mjs';
+
+const P = new URLSearchParams(location.search);
+const num = (k, d) => (P.has(k) && P.get(k) !== '' && Number.isFinite(Number(P.get(k))) ? Number(P.get(k)) : d);
+const hud = document.getElementById('hud');
+if (P.get('hud') === '0') hud.style.display = 'none';
+if (P.get('cross') === '0' || P.get('hud') === '0') document.getElementById('cross').style.display = 'none';
+const DEG = Math.PI / 180;
+
+async function loadTextures() {
+  try {
+    const T = await import('../src/render/textures.js');
+    const textures = T.generateTextures();
+    if (!textures || !textures.data) throw new Error('generateTextures returned nothing');
+    let misc;
+    try { misc = T.generateMiscTextures(); } catch (e) { console.warn('generateMiscTextures failed', e.message); }
+    return {
+      source: 'textures.js', textures, misc,
+      buildMipChain: typeof T.buildMipChain === 'function' ? T.buildMipChain : undefined,
+      alphaModes: typeof T.getLayerAlphaModes === 'function' ? T.getLayerAlphaModes() : undefined,
+    };
+  } catch (e) {
+    console.warn('[render-test] textures.js unavailable, using placeholders:', e.message);
+    return { source: 'placeholder', textures: placeholderTextures() };
+  }
+}
+
+async function loadEntityRenderer(mode) {
+  if (mode === 'none') return null;
+  if (mode === 'real') {
+    try {
+      const m = await import('../src/render/entityrenderer.js');
+      if (typeof m.EntityRenderer === 'function') return m.EntityRenderer;
+    } catch (e) {
+      console.warn('[render-test] entityrenderer.js unavailable, using the mock:', e.message);
+    }
+  }
+  return MockEntityRenderer;
+}
+
+async function buildMeshes(world, smooth) {
+  const meshes = [];
+  if (P.get('mesher') === 'real') {
+    try {
+      const L = await import('../src/world/lighting.js');
+      const M = await import('../src/world/mesher.js');
+      // copy the periodic test map into 9 chunk arrays per center chunk
+      for (let cz = 0; cz < 4; cz++) for (let cx = 0; cx < 4; cx++) {
+        const chunks = [];
+        for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+          const c = new Uint8Array(65536);
+          for (let y = 0; y < HEIGHT; y++) for (let z = 0; z < 16; z++) for (let x = 0; x < 16; x++) {
+            c[(y << 8) | (z << 4) | x] = world.get((cx + dx) * 16 + x, y, (cz + dz) * 16 + z);
+          }
+          chunks.push(c);
+        }
+        const region = L.buildRegion(chunks);
+        const light = L.computeLight(region);
+        const tints = { grass: new Uint32Array(256).fill(0x59bd91), foliage: new Uint32Array(256).fill(0x2fab77) };
+        const secs = M.meshChunk(region, light, 0xffff, tints, { smoothLighting: smooth });
+        for (const s of secs) meshes.push({ cx, sy: s.sy, cz, ...s });
+      }
+      return { meshes, mesher: 'mesher.js' };
+    } catch (e) {
+      console.warn('[render-test] real mesher failed, using the test mesher:', e.message);
+      meshes.length = 0;
+    }
+  }
+  for (let cz = 0; cz < 4; cz++) for (let cx = 0; cx < 4; cx++) for (let sy = 0; sy < HEIGHT / 16; sy++) {
+    const m = world.meshSection(cx, sy, cz, smooth);
+    if (m.opaque || m.cutout || m.translucent) meshes.push({ cx, sy, cz, ...m });
+  }
+  return { meshes, mesher: 'test mesher' };
+}
+
+const t0 = performance.now();
+const world = new TestWorld().generate().computeLight();
+const tWorld = performance.now() - t0;
+const { meshes, mesher } = await buildMeshes(world, P.get('smooth') !== '0');
+const tMesh = performance.now() - t0 - tWorld;
+const tex = await loadTextures();
+const EntityRendererClass = await loadEntityRenderer(P.get('entities') ?? 'mock');
+
+const canvas = document.getElementById('c');
+const renderer = new Renderer(canvas, {
+  textures: tex.textures, misc: tex.misc, EntityRendererClass,
+  buildMipChain: tex.buildMipChain, alphaModes: tex.alphaModes,
+  filtering: P.get('filter') ?? 'smooth', anisotropy: num('aniso', 8),
+});
+const fit = () => renderer.resize(window.innerWidth, window.innerHeight, window.devicePixelRatio || 1);
+fit();
+window.addEventListener('resize', fit);
+
+const rd = num('rd', 6);
+const tiles = num('tiles', Math.ceil((rd + 1) / 4));
+const stack = Math.max(1, Math.min(2, num('stack', 1)));   // stack=2: a second copy of the map 128 blocks higher
+function uploadAll() {
+  const t = performance.now();
+  for (let k = 0; k < stack; k++) for (let tz = -tiles; tz <= tiles; tz++) for (let tx = -tiles; tx <= tiles; tx++) {
+    for (const m of meshes) renderer.setSectionMesh(m.cx + tx * 4, m.sy + k * 8, m.cz + tz * 4, m.opaque, m.cutout, m.translucent);
+  }
+  return performance.now() - t;
+}
+let tUpload = uploadAll();
+// stress=N: additionally fill EVERY section within N chunks with a small mesh (8 cubes, opaque + cutout) to measure
+// draw-call overhead with many thousands of sections.
+if (num('stress', 0) > 0) {
+  const N = num('stress', 0);
+  const make = (layer) => {
+    const out = [];
+    for (let k = 0; k < 8; k++) {
+      const bx = (k * 5) % 16, by = (k * 7) % 16, bz = (k * 3) % 16;
+      for (let f = 0; f < 6; f++) {
+        const corners = [[[1,0,1],[1,0,0],[1,1,0],[1,1,1]], [[0,0,0],[0,0,1],[0,1,1],[0,1,0]], [[0,1,1],[1,1,1],[1,1,0],[0,1,0]],
+          [[0,0,0],[1,0,0],[1,0,1],[0,0,1]], [[0,0,1],[1,0,1],[1,1,1],[0,1,1]], [[1,0,0],[0,0,0],[0,1,0],[1,1,0]]][f];
+        const uv = [[0, 16], [16, 16], [16, 0], [0, 0]];
+        corners.forEach(([x, y, z], i) => out.push(
+          (((bx + x) * 16 + 16) | (((by + y) * 16 + 16) << 9) | (((bz + z) * 16 + 16) << 18) | (3 << 27) | (f << 29)) >>> 0,
+          (layer | (uv[i][0] << 8) | (uv[i][1] << 13) | (60 << 18)) >>> 0, 0xffffff));
+      }
+    }
+    return Uint32Array.from(out);
+  };
+  const opaque = make(4), cutout = make(12);
+  const t = performance.now();
+  for (let cz = -N; cz <= N; cz++) for (let cx = -N; cx <= N; cx++) for (let sy = 0; sy < 16; sy++) {
+    if (renderer.hasSection(cx, sy, cz)) continue;
+    renderer.setSectionMesh(cx, sy, cz, opaque, cutout, null);
+  }
+  tUpload += performance.now() - t;
+}
+renderer.onContextRestored = () => { console.log('[render-test] context restored, re-uploading'); uploadAll(); };
+
+// camera: optional preset (view=...), then explicit parameters override
+const surface = (x, z) => {
+  for (let y = HEIGHT - 1; y > 0; y--) {
+    const id = world.get(Math.floor(x), y, Math.floor(z));
+    if (id && id !== BLOCK.SHORT_GRASS && id !== BLOCK.FERN) return y + 1;
+  }
+  return 64;
+};
+const VIEWS = {
+  overview: () => ({ x: 20.5, y: 76, z: 62.5, yaw: 30, pitch: -12 }),
+  aquarium: () => {
+    const [ax, base, az] = world.features.aquarium;
+    return { x: ax + 2, y: base + 5.2, z: az + 8.5, yaw: 0, pitch: -24 };
+  },
+  cave: () => ({ x: 36.5, y: 67.6, z: 44.5, yaw: -90, pitch: -6 }),
+  chamber: () => ({ x: 42.5, y: 68.2, z: 44.5, yaw: -100, pitch: -18 }),
+  lake: () => ({ x: 22.5, y: surface(22.5, 26.5) + 1.62, z: 26.5, yaw: 40, pitch: -18 }),
+  platform: () => ({ x: 9.5, y: 91.6, z: 10.5, yaw: 0, pitch: -32 }),
+};
+const preset = (VIEWS[P.get('view')] ?? VIEWS.overview)();
+const cam = {
+  x: num('x', preset.x), y: num('y', preset.y), z: num('z', preset.z),
+  yaw: num('yaw', preset.yaw) * DEG, pitch: num('pitch', preset.pitch) * DEG, roll: num('roll', 0) * DEG, fov: num('fov', 70),
+};
+if (P.has('aim')) {
+  // aim=x,y,z: look at that world point
+  const [ax, ay, az] = P.get('aim').split(',').map(Number);
+  const dx = ax - cam.x, dy = ay - cam.y, dz = az - cam.z;
+  cam.yaw = Math.atan2(-dx, -dz);
+  cam.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+}
+let selection = null, breaking = null;
+if (P.has('select')) {
+  const [sx, sy, sz] = P.get('select').split(',').map(Number);
+  const id = world.get(sx, sy, sz);
+  selection = { x: sx, y: sy, z: sz, box: [...getSelectionBox(id)] };
+  if (P.has('crack')) breaking = { x: sx, y: sy, z: sz, stage: num('crack', 5) };
+}
+// a few dropped items / particles in front of the camera for the entity hooks
+const fwdX = -Math.sin(cam.yaw), fwdZ = -Math.cos(cam.yaw);
+const ground = (x, z) => {
+  for (let y = HEIGHT - 1; y > 0; y--) {
+    const id = world.get(Math.floor(x), y, Math.floor(z));
+    if (id && id !== BLOCK.SHORT_GRASS && id !== BLOCK.FERN) return y + 1;
+  }
+  return 64;
+};
+const entities = [];
+if ((P.get('entities') ?? 'mock') !== 'none') {
+  for (let i = 0; i < 3; i++) {
+    const ex = cam.x + fwdX * (3 + i) + (i - 1) * 0.8, ez = cam.z + fwdZ * (3 + i);
+    entities.push({ kind: 'item', x: ex, y: ground(ex, ez), z: ez, itemId: [BLOCK.STONE, BLOCK.OAK_LOG, BLOCK.TNT][i], count: 1, age: i, seed: i / 3, light: 0xf0 });
+  }
+}
+const particles = { count: 0, data: new Float32Array(12 * 16) };
+const hand = P.get('hand') === '1' ? { itemId: BLOCK.GRASS_BLOCK, swing: 0, equip: 1, bobX: 0, bobY: 0, light: 0xf0 } : null;
+
+const timeOfDay = num('time', 0.25);
+const fixedT = P.has('t') ? num('t', 0) : null;
+const frame = {
+  camera: cam, timeOfDay, daylight: computeDaylight(timeOfDay), time: 0, renderDistance: rd,
+  underwater: P.get('underwater') === '1', inLava: P.get('lava') === '1', clouds: P.get('clouds') !== '0',
+  selection, breaking, entities, particles, hand,
+};
+
+let frames = 0;
+let lastHud = 0;
+const cpuTimes = [];
+function draw() {
+  frame.time = fixedT ?? performance.now() / 1000;
+  const a = performance.now();
+  renderer.render(frame);
+  const cpu = performance.now() - a;
+  cpuTimes.push(cpu);
+  if (cpuTimes.length > 120) cpuTimes.shift();
+  frames++;
+  if (performance.now() - lastHud > 250) {
+    lastHud = performance.now();
+    const s = renderer.getStats();
+    const avg = cpuTimes.reduce((p, c) => p + c, 0) / cpuTimes.length;
+    hud.textContent = `renderer test  textures: ${tex.source}  mesher: ${mesher}  filter: ${renderer.filtering}\n` +
+      `pos ${cam.x.toFixed(1)} ${cam.y.toFixed(1)} ${cam.z.toFixed(1)}  yaw ${(cam.yaw / DEG).toFixed(0)} pitch ${(cam.pitch / DEG).toFixed(0)}  time ${timeOfDay}\n` +
+      `sections ${s.sections} visible ${s.visibleSections} draws ${s.drawCalls} tris ${s.triangles} gpu ${(s.gpuMemoryBytes / 1048576).toFixed(1)} MB\n` +
+      `render() cpu ${avg.toFixed(2)} ms  world ${tWorld.toFixed(0)} ms mesh ${tMesh.toFixed(0)} ms upload ${tUpload.toFixed(0)} ms`;
+  }
+  if (frames === 6) window.__ready = true;
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+window.__renderer = renderer;
+window.__frame = frame;
+window.__world = world;
+window.__info = { textures: tex.source, mesher, tWorld, tMesh, tUpload, meshes: meshes.length };
+
+// benchmark: N frames, each followed by a 1-pixel readPixels (forces the GPU to finish the frame), so 'total' is
+// the full CPU + GPU latency of a frame; 'throughput' renders N frames back-to-back with a single sync at the end.
+window.__bench = async (n = 120) => {
+  const gl = renderer.gl;
+  const px = new Uint8Array(4);
+  const res = { cpu: [], total: [] };
+  const sync = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  sync();
+  for (let i = 0; i < n; i++) {
+    frame.time = (fixedT ?? 0) + i / 60;
+    const a = performance.now();
+    renderer.render(frame);
+    const b = performance.now();
+    sync();
+    const c = performance.now();
+    res.cpu.push(b - a);
+    res.total.push(c - a);
+    if (i % 10 === 0) await new Promise((r) => setTimeout(r, 0));
+  }
+  const t0 = performance.now();
+  for (let i = 0; i < n; i++) { frame.time = (fixedT ?? 0) + i / 60; renderer.render(frame); }
+  sync();
+  const throughputMs = (performance.now() - t0) / n;
+  const stat = (arr) => {
+    const s = [...arr].sort((p, q) => p - q);
+    return { avg: +(arr.reduce((p, q) => p + q, 0) / arr.length).toFixed(3), p50: +s[s.length >> 1].toFixed(3), p95: +s[Math.floor(s.length * 0.95)].toFixed(3), max: +s[s.length - 1].toFixed(3) };
+  };
+  const st = renderer.getStats();
+  return { cpu: stat(res.cpu), total: stat(res.total), throughputMs: +throughputMs.toFixed(3), sections: st.sections, visible: st.visibleSections, draws: st.drawCalls, tris: st.triangles, gpuMB: +(st.gpuMemoryBytes / 1048576).toFixed(1), width: gl.drawingBufferWidth, height: gl.drawingBufferHeight };
+};
+
+// context loss / restore test
+window.__loseContext = async () => {
+  const ext = renderer.gl.getExtension('WEBGL_lose_context');
+  if (!ext) return 'no WEBGL_lose_context';
+  ext.loseContext();
+  await new Promise((r) => setTimeout(r, 300));
+  const lost = renderer.contextLost;
+  ext.restoreContext();
+  await new Promise((r) => setTimeout(r, 600));
+  return { lostSeen: lost, restored: !renderer.contextLost, sections: renderer.getStats().sections };
+};
+if (P.get('lost') === '1') {
+  setTimeout(async () => { window.__lostResult = await window.__loseContext(); console.log('[render-test] lose/restore', JSON.stringify(window.__lostResult)); }, 300);
+}
+console.log('[render-test] ready', JSON.stringify(window.__info));
+</script>
+</body>
+</html>

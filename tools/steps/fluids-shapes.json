@@ -1,0 +1,86 @@
+[
+ {
+  "log": "chests, crops on farmland, wall torches, farmland next to water (sky platform)"
+ },
+ {
+  "eval": "import('/tools/fluids-helpers.js').then((m) => m.install())"
+ },
+ {
+  "eval": "__game.debug.setTime(6000); __game.debug.hideHud(true); __fx.fill(-12, 100, -12, 12, 100, 12, 'grass_block') + __fx.fill(-12, 101, -12, 12, 108, 12, 'air')"
+ },
+ {
+  "eval": "(() => { const w = __game.world; w.setBlock(-6, 101, -2, 95); w.setBlock(-4, 101, -2, 96); w.setBlock(-2, 101, -2, 97); w.setBlock(0, 101, -2, 98); w.setBlock(2, 101, -2, 95); w.setBlock(3, 101, -2, 95); return 'chests'; })()"
+ },
+ {
+  "eval": "(() => { const w = __game.world; for (let x = -6; x <= 1; x++) { w.setBlock(x, 100, 2, 119); w.setBlock(x, 101, 2, 121 + (x + 6)); } for (let x = -6; x <= 1; x++) { w.setBlock(x, 100, 3, 120); w.setBlock(x, 101, 3, 121 + (x + 6)); } w.setBlock(2, 100, 3, 14); for (let x = -6; x <= 1; x++) w.setBlock(x, 100, 4, 120); return 'crops'; })()"
+ },
+ {
+  "eval": "(() => { const w = __game.world; w.setBlock(6, 101, 0, 1); w.setBlock(6, 102, 0, 1); w.setBlock(6, 101, 1, 130); w.setBlock(6, 101, -1, 129); w.setBlock(7, 101, 0, 131); w.setBlock(5, 101, 0, 132); w.setBlock(6, 103, 0, 46); return [__fx.row(5, 7, 101, 0), __game.debug.blockName(6, 101, 1), __game.debug.blockName(6, 101, -1)]; })()"
+ },
+ {
+  "eval": "__game.debug.waitIdle(10000)"
+ },
+ {
+  "eval": "__fx.view(-1.5, 104.5, 7.5, -1.5, 101, 0)"
+ },
+ {
+  "sleep": 500
+ },
+ {
+  "screenshot": "tools/out/w2/shapes-overview.png"
+ },
+ {
+  "eval": "__fx.view(-3, 102.6, 0.6, -3, 101.3, -2)"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "screenshot": "tools/out/w2/shapes-chests.png"
+ },
+ {
+  "eval": "__fx.view(-2.5, 102.4, 6.5, -2.5, 101.2, 2.5)"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "screenshot": "tools/out/w2/shapes-crops.png"
+ },
+ {
+  "eval": "__fx.view(6.5, 102.8, 3.2, 6.5, 101.8, 0.5)"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "screenshot": "tools/out/w2/shapes-torches.png"
+ },
+ {
+  "eval": "__fx.view(9.2, 102.5, 0.5, 6.5, 101.8, 0.5)"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "screenshot": "tools/out/w2/shapes-torches-side.png"
+ },
+ {
+  "eval": "__game.debug.setTime(18000); __fx.view(6.5, 103.5, 4.5, 6.5, 101.5, 0.5)"
+ },
+ {
+  "sleep": 500
+ },
+ {
+  "screenshot": "tools/out/w2/shapes-torches-night.png"
+ },
+ {
+  "eval": "__game.debug.setTime(6000); __fx.view(-2.5, 107, 9.5, -2.5, 100.5, 3)"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "screenshot": "tools/out/w2/shapes-farmland.png"
+ }
+]

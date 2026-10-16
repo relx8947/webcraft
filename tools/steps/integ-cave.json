@@ -1,0 +1,10 @@
+[
+  {"waitFor": "window.__ready", "timeout": 90000},
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"eval": "(async()=>{const g=__game,d=g.debug,w=g.world; const air=(x,y,z)=>w.getBlock(x,y,z)===0; const solid=(x,y,z)=>{const b=w.getBlock(x,y,z); return b!==0 && !['water','lava','torch'].includes(d.blockName(x,y,z));}; const p=g.player; const px=Math.floor(p.x), pz=Math.floor(p.z); let best=null, bestN=0; for (let x=px-56;x<=px+56;x+=3) for (let z=pz-56;z<=pz+56;z+=3) { const top=w.getTopY(x,z); for (let y=14;y<Math.min(55, top-8);y++) { if (!air(x,y,z) || !solid(x,y-1,z) || !air(x,y+1,z)) continue; let n=0; for (let dx=-4;dx<=4;dx++) for (let dz=-4;dz<=4;dz++) for (let dy=0;dy<=3;dy++) if (air(x+dx,y+dy,z+dz)) n++; let lava=0; for (let dx=-6;dx<=6;dx++) for (let dz=-6;dz<=6;dz++) for (let dy=-2;dy<=3;dy++) if (d.blockName(x+dx,y+dy,z+dz)==='lava') lava++; if (n>bestN && lava===0) { bestN=n; best=[x,y,z]; } } } if (!best) return 'no cave'; const [cx,cy,cz]=best; let t=0; for (let dx=-8;dx<=8;dx+=4) for (let dz=-8;dz<=8;dz+=4) { if (dx===0&&dz===0) continue; for (let y=cy+3;y>=cy-4;y--) { if (air(cx+dx,y,cz+dz) && solid(cx+dx,y-1,cz+dz) && w.getBlock(cx+dx,y-1,cz+dz)!==w.getBlock(0,300,0)) { if (d.setBlock(cx+dx,y,cz+dz,'torch')) t++; break; } } } p.setPosition(cx+0.5, cy, cz+0.5); p.flying=false; d.setTime(18000); d.lookDeg(0, -12); d.hideHud(false); await d.waitIdle(30000); await d.frames(30); window.__cave=best; return {best, airCount: bestN, torches: t, light: w.getLight(cx,cy+1,cz)}})()"},
+  {"screenshot": "tools/out/integ-cave1.png"},
+  {"eval": "(async()=>{const d=__game.debug; d.lookDeg(120, -15); await d.frames(10); return 1})()"},
+  {"screenshot": "tools/out/integ-cave2.png"},
+  {"eval": "(async()=>{const d=__game.debug; d.lookDeg(240, -10); await d.frames(10); return 1})()"},
+  {"screenshot": "tools/out/integ-cave3.png"}
+]

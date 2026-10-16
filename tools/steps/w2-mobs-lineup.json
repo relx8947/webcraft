@@ -1,0 +1,20 @@
+[
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"eval": "(async()=>{const g=__game,d=g.debug,p=g.player,w=g.world; d.setMode('creative'); p.flying=false; d.setTime(6000); d.hideHud(true); const x0=Math.floor(p.x), z0=Math.floor(p.z); const y=Math.floor(p.y); for(let dx=-9;dx<=9;dx++) for(let dz=-12;dz<=2;dz++){ d.setBlock(x0+dx,y-1,z0+dz,'grass_block'); for(let k=0;k<6;k++) d.setBlock(x0+dx,y+k,z0+dz,'air'); d.setBlock(x0+dx,y-2,z0+dz,'dirt'); } d.look(0,0); window.__L=[]; const types=['pig','cow','sheep','chicken','zombie','skeleton','creeper','spider']; types.forEach((t,i)=>{ const m=g.spawnMob(t, x0-7+i*2+0.5, y, z0-7+0.5, {persistent:true, yaw:0}); m.yaw=0; m.bodyYaw=0; m.headYaw=0; window.__L.push(m); }); window.__pos=window.__L.map(m=>[m.x,m.y,m.z]); d.lookAt(x0+0.5, y+0.8, z0-7+0.5); await d.frames(4); return window.__L.map(m=>m.mobType+'@'+m.x.toFixed(1)+','+m.y.toFixed(1)+','+m.z.toFixed(1))})()"},
+  {"sleep": 700},
+  {"screenshot": "tools/out/w2int/lineup-day.png"},
+  {"eval": "(()=>{const g=__game; return window.__L.map(m=>m.mobType+(m.fireTime>0?' burning':'')+' hp'+m.health)})()"},
+  {"sleep": 2500},
+  {"eval": "(()=>{const g=__game; return window.__L.map(m=>m.mobType+(m.fireTime>0?' burning':'')+' hp'+m.health.toFixed(1))})()"},
+  {"screenshot": "tools/out/w2int/lineup-day-burning.png"},
+  {"eval": "(async()=>{const g=__game,d=g.debug; d.setTime(18000); window.__L.forEach((m,i)=>{ if(m.removed||m.dead) return; m.fireTime=0; m.setPosition(...window.__pos[i]); m.yaw=0; m.bodyYaw=0; m.headYaw=0; m.body.vx=0; m.body.vz=0; }); await d.frames(3); return window.__L.map(m=>m.mobType+(m.removed?' removed':'')+' hp'+m.health.toFixed(1))})()"},
+  {"sleep": 500},
+  {"screenshot": "tools/out/w2int/lineup-night.png"},
+  {"eval": "(async()=>{const g=__game,d=g.debug; g.perspective=1; await d.frames(3); return g.perspective})()"},
+  {"sleep": 400},
+  {"screenshot": "tools/out/w2int/lineup-night-f5.png"},
+  {"eval": "(async()=>{const g=__game,d=g.debug; g.perspective=2; d.setTime(6000); await d.frames(3); return g.perspective})()"},
+  {"sleep": 400},
+  {"screenshot": "tools/out/w2int/lineup-day-f5-front.png"},
+  {"eval": "(async()=>{const g=__game,d=g.debug; g.perspective=0; d.hideHud(false); return g.getDebugInfo().slice(0,4)})()"}
+]

@@ -1,0 +1,19 @@
+[
+  {"waitFor": "window.__ready", "timeout": 90000},
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"eval": "(()=>{__game.ui.automation=false; __game.debug.lookDeg(0,0); return __game.ui.chatLog.lines.length})()"},
+  {"key": "ControlLeft", "action": "down"},
+  {"key": "KeyW", "action": "down"},
+  {"sleep": 1200},
+  {"eval": "({sprinting: __game.player.sprinting, hint: __game.ui.ctrlHintShown, chat: __game.ui.chatLog.lines.map((l) => l.el.textContent)})"},
+  {"screenshot": "tools/out/cont/ctrl-hint.png"},
+  {"key": "KeyW", "action": "up"},
+  {"key": "ControlLeft", "action": "up"},
+  {"sleep": 200},
+  {"key": "ControlLeft", "action": "down"},
+  {"key": "KeyW", "action": "down"},
+  {"sleep": 600},
+  {"key": "KeyW", "action": "up"},
+  {"key": "ControlLeft", "action": "up"},
+  {"eval": "({hintLines: __game.ui.chatLog.lines.filter((l) => l.el.textContent.includes('Ctrl')).length})"}
+]

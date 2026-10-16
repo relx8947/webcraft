@@ -1,0 +1,4 @@
+[
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"eval": "(async()=>{const g=__game; const chat=[]; g.on('chat', t=>chat.push(t)); const run=async(c)=>{ const r=g.runCommand(c); await g.debug.frames(3); }; await run('/give 僵尸刷怪蛋'); await run('/summon 苦力怕 ~ ~ ~5'); await run('/summon pig ~2 ~ ~2'); await run('/summon cow ~-2 ~ ~2'); await run('/kill @e[type=!pig,distance=..10,limit=3]'); await run('/difficulty'); await run('/difficulty 困难'); await run('/difficulty normal'); await run('/help summon'); return chat})()"}
+]

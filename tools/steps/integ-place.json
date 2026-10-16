@@ -1,0 +1,20 @@
+[
+  {"waitFor": "window.__ready", "timeout": 90000},
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"eval": "(()=>{const g=__game; g.debug.give('dirt', 5); g.debug.give('torch', 4); g.debug.select(0); const p=g.player; const x=Math.floor(p.x), z=Math.floor(p.z)-3; const top=g.world.getTopY(x,z); window.__c=[x,top,z]; g.debug.lookAt(x+0.5, top+1.0, z+0.5); return {c: window.__c, t: g.debug.target()}})()"},
+  {"sleep": 100},
+  {"move": [640, 360]},
+  {"click": [640, 360], "button": "right"},
+  {"sleep": 300},
+  {"eval": "(()=>{const g=__game; const [x,y,z]=window.__c; return {above: g.debug.blockName(x,y+1,z), inv: g.player.inventory.slots.map((s,i)=>s?{i,id:s.id,n:s.count}:null).filter(Boolean)}})()"},
+  {"key": "Digit2"},
+  {"sleep": 100},
+  {"eval": "(()=>{const g=__game; const [x,y,z]=window.__c; g.debug.lookAt(x+1.5, y+1.0, z+0.5); return {sel: g.player.selectedSlot, t: g.debug.target()}})()"},
+  {"sleep": 100},
+  {"click": [640, 360], "button": "right"},
+  {"sleep": 300},
+  {"eval": "(()=>{const g=__game; const [x,y,z]=window.__c; return {torch: g.debug.blockName(x+1,y+1,z), inv: g.player.inventory.slots.map((s,i)=>s?{i,id:s.id,n:s.count}:null).filter(Boolean)}})()"},
+  {"eval": "(()=>{const g=__game; const [x,y,z]=window.__c; g.debug.lookAt(x+0.5, y+1.5, z+1.5); return 1})()"},
+  {"sleep": 300},
+  {"screenshot": "tools/out/integ-place.png"}
+]

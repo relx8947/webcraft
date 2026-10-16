@@ -1,0 +1,241 @@
+[
+ {
+  "waitFor": "window.__ready",
+  "timeout": 90000
+ },
+ {
+  "eval": "__game.debug.waitIdle(30000)"
+ },
+ {
+  "eval": "(()=>{const d=__game.debug; d.give('oak_log', 6); d.give('cobblestone', 20); d.give('stick', 4); d.give('crafting_table', 1); return 1})()"
+ },
+ {
+  "key": "KeyE"
+ },
+ {
+  "sleep": 500
+ },
+ {
+  "click": [
+   423,
+   561
+  ]
+ },
+ {
+  "sleep": 100
+ },
+ {
+  "click": [
+   692,
+   188
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 100
+ },
+ {
+  "click": [
+   423,
+   561
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "screenshot": "tools/out/integ-craft-2x2.png"
+ },
+ {
+  "click": [
+   861,
+   219
+  ]
+ },
+ {
+  "sleep": 100
+ },
+ {
+  "click": [
+   423,
+   387
+  ]
+ },
+ {
+  "sleep": 100
+ },
+ {
+  "eval": "(()=>{const inv=__game.player.inventory; return inv.slots.map((s,i)=>s?{i,id:s.id,n:s.count}:null).filter(Boolean)})()"
+ },
+ {
+  "key": "KeyE"
+ },
+ {
+  "sleep": 400
+ },
+ {
+  "eval": "({screen: __game.ui.currentScreen, input: __game.input.enabled})"
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 100
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const x=Math.floor(p.x), z=Math.floor(p.z)-2; const y=g.world.getTopY(x,z)+1; for (let dz=-1; dz<=2; dz++) for (let dy=0; dy<=3; dy++) d.setBlock(x, Math.floor(p.y)+dy, z+dz, 'air'); const yy=g.world.getTopY(x,z)+1; d.setBlock(x,yy,z,'crafting_table'); d.lookAt(x+0.5,yy+0.5,z+0.5); return [x,yy,z]})()"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "eval": "({t: __game.debug.target(), b: __game.debug.blockName(7,81,5), p: [__game.player.x, __game.player.y, __game.player.z, __game.player.yaw, __game.player.pitch], sel: __game.player.getSelectedStack(), inputEnabled: __game.input.enabled, active: __game.input.active})"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "click": [
+   640,
+   360
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 500
+ },
+ {
+  "eval": "({screen: __game.ui.currentScreen})"
+ },
+ {
+  "eval": "(()=>{const slots=[...document.querySelectorAll('#ui-root .slot')].map(e=>{const r=e.getBoundingClientRect(); return [Math.round(r.x+r.width/2), Math.round(r.y+r.height/2)]}); return {n: slots.length, grid: slots.slice(0,10)}})()"
+ },
+ {
+  "screenshot": "tools/out/integ-crafting-table.png"
+ },
+ {
+  "eval": "(()=>{const slots=[...document.querySelectorAll('#ui-root .slot')].map(e=>{const r=e.getBoundingClientRect(); return [Math.round(r.x+r.width/2), Math.round(r.y+r.height/2)]}); window.__slots=slots; return slots.length})()"
+ },
+ {
+  "click": [
+   477,
+   561
+  ]
+ },
+ {
+  "sleep": 80
+ },
+ {
+  "click": [
+   489,
+   186
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 80
+ },
+ {
+  "click": [
+   543,
+   186
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 80
+ },
+ {
+  "click": [
+   597,
+   186
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 80
+ },
+ {
+  "click": [
+   477,
+   561
+  ]
+ },
+ {
+  "sleep": 80
+ },
+ {
+  "click": [
+   531,
+   561
+  ]
+ },
+ {
+  "sleep": 80
+ },
+ {
+  "click": [
+   543,
+   240
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 80
+ },
+ {
+  "click": [
+   543,
+   294
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 80
+ },
+ {
+  "click": [
+   531,
+   561
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "screenshot": "tools/out/integ-crafting-pickaxe.png"
+ },
+ {
+  "click": [
+   771,
+   240
+  ]
+ },
+ {
+  "sleep": 80
+ },
+ {
+  "click": [
+   693,
+   561
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "eval": "(()=>{const inv=__game.player.inventory; return inv.slots.map((s,i)=>s?{i,id:s.id,n:s.count,name:s.id}:null).filter(Boolean)})()"
+ },
+ {
+  "key": "Escape"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "eval": "({screen: __game.ui.currentScreen, input: __game.input.enabled})"
+ }
+]

@@ -1,0 +1,38 @@
+[
+ {
+  "log": "natural river / shore rendering with the Minecraft corner heights (seed 42 near spawn)"
+ },
+ {
+  "eval": "import('/tools/fluids-helpers.js').then((m) => m.install())"
+ },
+ {
+  "eval": "__game.debug.setTime(5000); __game.debug.hideHud(true); __fx.view(41.5, 70, 26.5, 34, 62, 36)"
+ },
+ {
+  "eval": "__game.debug.waitIdle(20000)"
+ },
+ {
+  "sleep": 500
+ },
+ {
+  "screenshot": "tools/out/w2/shore-day.png"
+ },
+ {
+  "eval": "__fx.view(40.5, 63.6, 30.5, 34, 62.6, 36)"
+ },
+ {
+  "sleep": 500
+ },
+ {
+  "screenshot": "tools/out/w2/shore-low.png"
+ },
+ {
+  "eval": "__fx.view(38.5, 61.2, 36.5, 38.5, 63, 30)"
+ },
+ {
+  "sleep": 500
+ },
+ {
+  "screenshot": "tools/out/w2/shore-underwater.png"
+ }
+]

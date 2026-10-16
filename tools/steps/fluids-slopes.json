@@ -1,0 +1,20 @@
+[
+  {"log": "close-ups of sloped water and lava, across a chunk border (x = 0 / z = 0 lines)"},
+  {"eval": "import('/tools/fluids-helpers.js').then((m) => m.install())"},
+  {"eval": "__game.debug.setTime(6000); __game.debug.hideHud(true); __fx.fill(-16, 100, -16, 16, 100, 16, 'stone') + __fx.fill(-16, 101, -16, 16, 108, 16, 'air')"},
+  {"eval": "__fx.fill(-1, 101, -1, -1, 102, -1, 'stone'); __game.world.setBlock(-1, 103, -1, 14); __game.world.setBlock(8, 101, 8, 15); 'placed'"},
+  {"eval": "__fx.view(-1.5, 106, 9.5, -1, 101, -1)"},
+  {"eval": "__fx.settle(30000).then((r) => JSON.stringify(r))"},
+  {"eval": "__fx.view(4.6, 102.2, 4.6, -1, 101.5, -1)"},
+  {"sleep": 400},
+  {"screenshot": "tools/out/w2/slope-water-low.png"},
+  {"eval": "__fx.view(-6.5, 101.9, 1.5, -1, 102, -1)"},
+  {"sleep": 400},
+  {"screenshot": "tools/out/w2/slope-water-side.png"},
+  {"eval": "__fx.view(11.5, 102.6, 11.5, 8.5, 101, 8.5)"},
+  {"sleep": 400},
+  {"screenshot": "tools/out/w2/slope-lava.png"},
+  {"eval": "__fx.view(-1.5, 100.6, 4.5, -1.5, 101.6, -1.5)"},
+  {"sleep": 400},
+  {"screenshot": "tools/out/w2/slope-underwater-surface.png"}
+]

@@ -1,0 +1,13 @@
+[
+  {"eval": "(async () => { const g = window.__game; const w = await import('/tools/mob-wire.js'); window.__w = w; await w.wire(g); g.setTime(3000); return 'mobs ' + g.entities.countEntities('mob'); })()"},
+  {"sleep": 3000},
+  {"eval": "(async () => { const g = window.__game; const p = g.player; const ms = g.entities.list.filter(e => e.type === 'mob' && !e.frozen && !e.hostile && !e.inWater).sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z)); const m = ms[0]; if (!m) return 'none'; window.__near = m; await g.debug.tp(m.x + 7, null, m.z + 4); g.debug.lookAt(m.x, m.y + 0.5, m.z); return m.mobType + ' at ' + m.x.toFixed(1) + ',' + m.y.toFixed(1) + ',' + m.z.toFixed(1) + ' player ' + g.player.x.toFixed(1) + ',' + g.player.y.toFixed(1) + ',' + g.player.z.toFixed(1); })()"},
+  {"sleep": 2500},
+  {"eval": "(() => { const g = window.__game, m = window.__near; g.debug.lookAt(m.x, m.y + 0.6, m.z); return window.__w.summary(g, 16); })()"},
+  {"sleep": 200},
+  {"screenshot": "tools/out/mobs/world-animals.png"},
+  {"sleep": 5000},
+  {"eval": "(() => { const g = window.__game, m = window.__near; g.debug.lookAt(m.x, m.y + 0.6, m.z); g.perspective = 2; return window.__w.summary(g, 16); })()"},
+  {"sleep": 300},
+  {"screenshot": "tools/out/mobs/world-animals-f5.png"}
+]

@@ -1,0 +1,1280 @@
+[
+ {
+  "waitFor": "window.__ready",
+  "timeout": 90000
+ },
+ {
+  "eval": "__game.debug.waitIdle(30000)"
+ },
+ {
+  "eval": "__game.debug.perf(true)"
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   760,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "sleep": 60
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   760,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "eval": "(()=>{const s=__game.debug.stats(); return {pos:[s.player.x.toFixed(1), s.player.y.toFixed(1), s.player.z.toFixed(1)], fps:s.fps, health:s.player.health, world:{loaded:s.world.loaded, meshed:s.world.meshed, pendingGen:s.world.pendingGenerate, pendingMesh:s.world.pendingMesh}}})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "sleep": 60
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   760,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   760,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "sleep": 60
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "eval": "(()=>{const s=__game.debug.stats(); return {pos:[s.player.x.toFixed(1), s.player.y.toFixed(1), s.player.z.toFixed(1)], fps:s.fps, health:s.player.health, world:{loaded:s.world.loaded, meshed:s.world.meshed, pendingGen:s.world.pendingGenerate, pendingMesh:s.world.pendingMesh}}})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   760,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "sleep": 60
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   760,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   745,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   730,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   715,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   685,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   670,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   655,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 700
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "eval": "(()=>{const s=__game.debug.stats(); return {pos:[s.player.x.toFixed(1), s.player.y.toFixed(1), s.player.z.toFixed(1)], fps:s.fps, health:s.player.health, world:{loaded:s.world.loaded, meshed:s.world.meshed, pendingGen:s.world.pendingGenerate, pendingMesh:s.world.pendingMesh}}})()"
+ },
+ {
+  "eval": "__game.debug.perf()"
+ },
+ {
+  "eval": "(()=>{const s=__game.debug.stats(); return {world:s.world, renderer:s.renderer, fps:s.fps}})()"
+ },
+ {
+  "screenshot": "tools/out/integ-walk-end.png"
+ }
+]

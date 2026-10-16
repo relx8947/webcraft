@@ -1,0 +1,2137 @@
+[
+ {
+  "eval": "__game.debug.waitIdle(30000)"
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; g.applySettings({difficulty:'normal'}); d.setTime(13500); p.inventory.set(0,{id:296,count:1,damage:0}); p.inventory.set(1,{id:46,count:32,damage:0}); p.inventory.set(2,{id:272,count:8,damage:0}); p.inventory.set(3,{id:3,count:64,damage:0}); d.select(0); d.perf(true); window.__log=[]; window.__deaths=0; window.__hurt=0; const orig=p.damage.bind(p); p.damage=(...a)=>{ window.__hurt++; window.__lastHit=a[1]+(a[3]?':'+(a[3].mobType||a[3].type):''); return orig(...a); }; window.__t0=performance.now(); return 'ok'})()"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } g.debug.look(p.yaw, 0); return 1})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyW"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Digit2"
+ },
+ {
+  "move": [
+   640,
+   520
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "click": [
+   640,
+   520
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "Digit1"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "move": [
+   900,
+   360
+  ]
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const ms=d.mobs(128); const r={t:'round0', s:Math.round((performance.now()-window.__t0)/1000), hp:+p.health.toFixed(1), food:p.food, dead:p.dead, hits:window.__hurt, last:window.__lastHit, hostile:ms.filter(m=>['zombie','skeleton','creeper','spider'].includes(m.type)).length, near16:ms.filter(m=>m.dist<16).map(m=>m.type).join(','), fps:Math.round(g.fps)}; window.__log.push(r); if (p.dead){ window.__deaths++; } return r})()"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } g.debug.look(p.yaw, 0); return 1})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyW"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Digit2"
+ },
+ {
+  "move": [
+   640,
+   520
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "click": [
+   640,
+   520
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "Digit1"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "move": [
+   900,
+   360
+  ]
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const ms=d.mobs(128); const r={t:'round1', s:Math.round((performance.now()-window.__t0)/1000), hp:+p.health.toFixed(1), food:p.food, dead:p.dead, hits:window.__hurt, last:window.__lastHit, hostile:ms.filter(m=>['zombie','skeleton','creeper','spider'].includes(m.type)).length, near16:ms.filter(m=>m.dist<16).map(m=>m.type).join(','), fps:Math.round(g.fps)}; window.__log.push(r); if (p.dead){ window.__deaths++; } return r})()"
+ },
+ {
+  "screenshot": "tools/out/w2int/night60-1.png"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } g.debug.look(p.yaw, 0); return 1})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyW"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Digit2"
+ },
+ {
+  "move": [
+   640,
+   520
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "click": [
+   640,
+   520
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "Digit1"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "move": [
+   900,
+   360
+  ]
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const ms=d.mobs(128); const r={t:'round2', s:Math.round((performance.now()-window.__t0)/1000), hp:+p.health.toFixed(1), food:p.food, dead:p.dead, hits:window.__hurt, last:window.__lastHit, hostile:ms.filter(m=>['zombie','skeleton','creeper','spider'].includes(m.type)).length, near16:ms.filter(m=>m.dist<16).map(m=>m.type).join(','), fps:Math.round(g.fps)}; window.__log.push(r); if (p.dead){ window.__deaths++; } return r})()"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } g.debug.look(p.yaw, 0); return 1})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyW"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Digit2"
+ },
+ {
+  "move": [
+   640,
+   520
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "click": [
+   640,
+   520
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "Digit1"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "move": [
+   900,
+   360
+  ]
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const ms=d.mobs(128); const r={t:'round3', s:Math.round((performance.now()-window.__t0)/1000), hp:+p.health.toFixed(1), food:p.food, dead:p.dead, hits:window.__hurt, last:window.__lastHit, hostile:ms.filter(m=>['zombie','skeleton','creeper','spider'].includes(m.type)).length, near16:ms.filter(m=>m.dist<16).map(m=>m.type).join(','), fps:Math.round(g.fps)}; window.__log.push(r); if (p.dead){ window.__deaths++; } return r})()"
+ },
+ {
+  "screenshot": "tools/out/w2int/night60-3.png"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } g.debug.look(p.yaw, 0); return 1})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyW"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Digit2"
+ },
+ {
+  "move": [
+   640,
+   520
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "click": [
+   640,
+   520
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "Digit1"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "move": [
+   900,
+   360
+  ]
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "Digit3"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; p.food=Math.min(p.food,15); g.debug.look(p.yaw,-1.0); return p.food})()"
+ },
+ {
+  "mouseDown": [
+   640,
+   360
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 1800
+ },
+ {
+  "mouseUp": [
+   640,
+   360
+  ],
+  "button": "right"
+ },
+ {
+  "key": "Digit1"
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const ms=d.mobs(128); const r={t:'round4', s:Math.round((performance.now()-window.__t0)/1000), hp:+p.health.toFixed(1), food:p.food, dead:p.dead, hits:window.__hurt, last:window.__lastHit, hostile:ms.filter(m=>['zombie','skeleton','creeper','spider'].includes(m.type)).length, near16:ms.filter(m=>m.dist<16).map(m=>m.type).join(','), fps:Math.round(g.fps)}; window.__log.push(r); if (p.dead){ window.__deaths++; } return r})()"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } g.debug.look(p.yaw, 0); return 1})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyW"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Digit2"
+ },
+ {
+  "move": [
+   640,
+   520
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "click": [
+   640,
+   520
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "Digit1"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "move": [
+   900,
+   360
+  ]
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const ms=d.mobs(128); const r={t:'round5', s:Math.round((performance.now()-window.__t0)/1000), hp:+p.health.toFixed(1), food:p.food, dead:p.dead, hits:window.__hurt, last:window.__lastHit, hostile:ms.filter(m=>['zombie','skeleton','creeper','spider'].includes(m.type)).length, near16:ms.filter(m=>m.dist<16).map(m=>m.type).join(','), fps:Math.round(g.fps)}; window.__log.push(r); if (p.dead){ window.__deaths++; } return r})()"
+ },
+ {
+  "screenshot": "tools/out/w2int/night60-5.png"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } g.debug.look(p.yaw, 0); return 1})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyW"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Digit2"
+ },
+ {
+  "move": [
+   640,
+   520
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "click": [
+   640,
+   520
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "Digit1"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "move": [
+   900,
+   360
+  ]
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const ms=d.mobs(128); const r={t:'round6', s:Math.round((performance.now()-window.__t0)/1000), hp:+p.health.toFixed(1), food:p.food, dead:p.dead, hits:window.__hurt, last:window.__lastHit, hostile:ms.filter(m=>['zombie','skeleton','creeper','spider'].includes(m.type)).length, near16:ms.filter(m=>m.dist<16).map(m=>m.type).join(','), fps:Math.round(g.fps)}; window.__log.push(r); if (p.dead){ window.__deaths++; } return r})()"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } g.debug.look(p.yaw, 0); return 1})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyW"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Digit2"
+ },
+ {
+  "move": [
+   640,
+   520
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "click": [
+   640,
+   520
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "Digit1"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "move": [
+   900,
+   360
+  ]
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const ms=d.mobs(128); const r={t:'round7', s:Math.round((performance.now()-window.__t0)/1000), hp:+p.health.toFixed(1), food:p.food, dead:p.dead, hits:window.__hurt, last:window.__lastHit, hostile:ms.filter(m=>['zombie','skeleton','creeper','spider'].includes(m.type)).length, near16:ms.filter(m=>m.dist<16).map(m=>m.type).join(','), fps:Math.round(g.fps)}; window.__log.push(r); if (p.dead){ window.__deaths++; } return r})()"
+ },
+ {
+  "screenshot": "tools/out/w2int/night60-7.png"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } g.debug.look(p.yaw, 0); return 1})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   680,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   580,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyW"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Digit2"
+ },
+ {
+  "move": [
+   640,
+   520
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "click": [
+   640,
+   520
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "Digit1"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "move": [
+   900,
+   360
+  ]
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const ms=d.mobs(128); const r={t:'round8', s:Math.round((performance.now()-window.__t0)/1000), hp:+p.health.toFixed(1), food:p.food, dead:p.dead, hits:window.__hurt, last:window.__lastHit, hostile:ms.filter(m=>['zombie','skeleton','creeper','spider'].includes(m.type)).length, near16:ms.filter(m=>m.dist<16).map(m=>m.type).join(','), fps:Math.round(g.fps)}; window.__log.push(r); if (p.dead){ window.__deaths++; } return r})()"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } g.debug.look(p.yaw, 0); return 1})()"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "Space"
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "move": [
+   600,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   700,
+   360
+  ]
+ },
+ {
+  "sleep": 350
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "key": "KeyW"
+ },
+ {
+  "key": "KeyW",
+  "action": "down"
+ },
+ {
+  "sleep": 1000
+ },
+ {
+  "key": "KeyW",
+  "action": "up"
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "sleep": 250
+ },
+ {
+  "key": "Digit2"
+ },
+ {
+  "move": [
+   640,
+   520
+  ]
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "click": [
+   640,
+   520
+  ],
+  "button": "right"
+ },
+ {
+  "sleep": 150
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "key": "Digit1"
+ },
+ {
+  "key": "KeyA",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyA",
+  "action": "up"
+ },
+ {
+  "key": "KeyD",
+  "action": "down"
+ },
+ {
+  "sleep": 600
+ },
+ {
+  "key": "KeyD",
+  "action": "up"
+ },
+ {
+  "move": [
+   900,
+   360
+  ]
+ },
+ {
+  "sleep": 300
+ },
+ {
+  "move": [
+   640,
+   360
+  ]
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const ms=d.mobs(128); const r={t:'round9', s:Math.round((performance.now()-window.__t0)/1000), hp:+p.health.toFixed(1), food:p.food, dead:p.dead, hits:window.__hurt, last:window.__lastHit, hostile:ms.filter(m=>['zombie','skeleton','creeper','spider'].includes(m.type)).length, near16:ms.filter(m=>m.dist<16).map(m=>m.type).join(','), fps:Math.round(g.fps)}; window.__log.push(r); if (p.dead){ window.__deaths++; } return r})()"
+ },
+ {
+  "screenshot": "tools/out/w2int/night60-9.png"
+ },
+ {
+  "eval": "(()=>{const g=__game,p=g.player; if (p.dead) { g.respawn(); g.ui.closeScreen?.(); } g.debug.look(p.yaw, 0); return 1})()"
+ },
+ {
+  "move": [
+   340,
+   360
+  ]
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   940,
+   360
+  ]
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   340,
+   360
+  ]
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   940,
+   360
+  ]
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   340,
+   360
+  ]
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   940,
+   360
+  ]
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   340,
+   360
+  ]
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "move": [
+   940,
+   360
+  ]
+ },
+ {
+  "sleep": 1200
+ },
+ {
+  "click": [
+   640,
+   360
+  ]
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug,p=g.player; const ms=d.mobs(128); const r={t:'final', s:Math.round((performance.now()-window.__t0)/1000), hp:+p.health.toFixed(1), food:p.food, dead:p.dead, hits:window.__hurt, last:window.__lastHit, hostile:ms.filter(m=>['zombie','skeleton','creeper','spider'].includes(m.type)).length, near16:ms.filter(m=>m.dist<16).map(m=>m.type).join(','), fps:Math.round(g.fps)}; window.__log.push(r); if (p.dead){ window.__deaths++; } return r})()"
+ },
+ {
+  "screenshot": "tools/out/w2int/night60-final.png"
+ },
+ {
+  "eval": "(()=>{const g=__game,d=g.debug; return {perf:d.perf(), seconds:Math.round((performance.now()-window.__t0)/1000), deaths:window.__deaths, hits:window.__hurt, spawner:g.spawner.stats}})()"
+ }
+]

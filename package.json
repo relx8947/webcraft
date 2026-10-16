@@ -1,0 +1,13 @@
+{
+  "name": "webcraft",
+  "version": "1.0.0",
+  "description": "WebCraft - a Minecraft-like voxel sandbox in pure WebGL2 + ES modules (no dependencies)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js --open",
+    "serve": "node server.js",
+    "test": "node --test \"tests/*.test.js\""
+  },
+  "engines": { "node": ">=22" }
+}

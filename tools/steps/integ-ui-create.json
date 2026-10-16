@@ -1,0 +1,10 @@
+[
+  {"sleep": 1500},
+  {"click": [640, 354]},
+  {"sleep": 800},
+  {"screenshot": "tools/out/integ-ui-worlds.png"},
+  {"click": [876, 594]},
+  {"sleep": 600},
+  {"eval": "(()=>{const b=[...document.querySelectorAll('#ui-root button, #ui-root .button, #ui-root input')].map(e=>{const r=e.getBoundingClientRect(); return [e.tagName, e.textContent.trim()||e.value, Math.round(r.x+r.width/2), Math.round(r.y+r.height/2)]}); return b})()"},
+  {"screenshot": "tools/out/integ-ui-create.png"}
+]

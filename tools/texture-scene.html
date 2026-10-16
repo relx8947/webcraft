@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WebCraft texture scene (WebGL2 texture-array check)</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #info { position: fixed; left: 8px; top: 6px; color: #fff; font: 12px Consolas, monospace; text-shadow: 1px 1px #000; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info"></div>
+<script type="module">
+// Standalone check of the texture array in a real WebGL2 pipeline: uploads generateTextures() with
+// buildMipChain() levels (NEAREST_MIPMAP_LINEAR, max level 4, anisotropy) and renders a small voxel
+// diorama with the SPEC §5.3 alpha rules (tintmask / cutout / translucent) and §4 face shading.
+// URL params: view=near|far|top, t=<seconds> (animation time).
+import { generateTextures, getLayerAlphaModes, buildMipChain } from '../src/render/textures.js';
+import {
+  BLOCK, FACE_LAYERS, RENDER_TYPE, RENDER, RENDER_LAYER, LAYER, TINT_TYPE, TINT, IS_OPAQUE, CULL_SAME, TEXTURES,
+} from '../src/world/registry.js';
+import { DEFAULT_TINTS, FACE_SHADE } from '../src/config.js';
+
+const params = new URLSearchParams(location.search);
+const VIEW = params.get('view') ?? 'near';
+const TIME = Number(params.get('t') ?? 0);
+
+const canvas = document.getElementById('c');
+canvas.width = innerWidth;
+canvas.height = innerHeight;
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+
+// ---------------------------------------------------------------- textures
+const tex = generateTextures();
+const modes = getLayerAlphaModes();
+const mips = buildMipChain(tex.data, tex.size, tex.layers, modes);
+const array = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D_ARRAY, array);
+gl.texStorage3D(gl.TEXTURE_2D_ARRAY, mips.length, gl.RGBA8, tex.size, tex.size, tex.layers);
+mips.forEach((lv, k) => {
+  const s = tex.size >> k;
+  gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, k, 0, 0, 0, s, s, tex.layers, gl.RGBA, gl.UNSIGNED_BYTE, lv);
+});
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST_MIPMAP_LINEAR);
+gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAX_LEVEL, mips.length - 1);
+const aniso = gl.getExtension('EXT_texture_filter_anisotropic');
+if (aniso) gl.texParameterf(gl.TEXTURE_2D_ARRAY, aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+
+// ---------------------------------------------------------------- world
+const W = 56, H = 40, D = 56;
+const world = new Uint8Array(W * H * D);
+const idx = (x, y, z) => (y * D + z) * W + x;
+const get = (x, y, z) => (x < 0 || y < 0 || z < 0 || x >= W || y >= H || z >= D ? 0 : world[idx(x, y, z)]);
+const set = (x, y, z, id) => { if (x >= 0 && y >= 0 && z >= 0 && x < W && y < H && z < D) world[idx(x, y, z)] = id; };
+let seed = 12345;
+const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+
+const heightAt = (x, z) => Math.round(12 + 2.2 * Math.sin(x * 0.21) + 1.8 * Math.cos(z * 0.17) + 1.2 * Math.sin((x + z) * 0.11));
+const WATER = 11;
+for (let x = 0; x < W; x++) for (let z = 0; z < D; z++) {
+  let h = heightAt(x, z);
+  const pond = Math.hypot(x - 36, z - 16) < 6.5;
+  if (pond) h = Math.min(h, 9);
+  for (let y = 0; y <= h; y++) {
+    let id = y === 0 ? BLOCK.BEDROCK : y < h - 3 ? BLOCK.STONE : y < h ? BLOCK.DIRT : BLOCK.GRASS_BLOCK;
+    if (y === h && h <= WATER) id = BLOCK.SAND;
+    if (id === BLOCK.STONE) {
+      const r = rnd();
+      if (r < 0.03) id = BLOCK.COAL_ORE; else if (r < 0.045) id = BLOCK.IRON_ORE; else if (r < 0.05) id = BLOCK.GOLD_ORE;
+      else if (r < 0.055) id = BLOCK.DIAMOND_ORE; else if (r < 0.06) id = BLOCK.REDSTONE_ORE; else if (r < 0.065) id = BLOCK.LAPIS_ORE;
+      else if (r < 0.1) id = BLOCK.GRANITE; else if (r < 0.12) id = BLOCK.ANDESITE; else if (r < 0.13) id = BLOCK.GRAVEL;
+    }
+    set(x, y, z, id);
+  }
+  for (let y = h + 1; y <= WATER; y++) set(x, y, z, BLOCK.WATER);
+}
+// Quarry: cut the near corner open to expose stone and ores.
+for (let x = 2; x < 14; x++) for (let z = 40; z < 54; z++) for (let y = 5; y < H; y++) set(x, y, z, 0);
+for (let x = 2; x < 14; x++) for (let z = 40; z < 54; z++) set(x, 4, z, BLOCK.STONE);
+set(6, 5, 46, BLOCK.LAVA); set(7, 5, 46, BLOCK.LAVA); set(6, 5, 47, BLOCK.LAVA);
+
+function tree(x, z, log, leaves, h) {
+  const g = heightAt(x, z);
+  for (let y = 1; y <= h; y++) set(x, g + y, z, log);
+  for (let dy = h - 2; dy <= h + 1; dy++) {
+    const r = dy > h - 1 ? 1 : 2;
+    for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+      if (Math.abs(dx) === r && Math.abs(dz) === r && (dy > h - 1 || rnd() < 0.5)) continue;
+      if (!get(x + dx, g + dy, z + dz)) set(x + dx, g + dy, z + dz, leaves);
+    }
+  }
+}
+function spruce(x, z, h) {
+  const g = heightAt(x, z);
+  for (let y = 1; y <= h; y++) set(x, g + y, z, BLOCK.SPRUCE_LOG);
+  for (let dy = 2; dy <= h + 1; dy++) {
+    const r = dy > h - 1 ? (dy > h ? 0 : 1) : (h - dy) % 2 === 0 ? 2 : 1;
+    for (let dx = -r; dx <= r; dx++) for (let dz = -r; dz <= r; dz++) {
+      if (r > 1 && Math.abs(dx) === r && Math.abs(dz) === r) continue;
+      if (!get(x + dx, g + dy, z + dz)) set(x + dx, g + dy, z + dz, BLOCK.SPRUCE_LEAVES);
+    }
+  }
+}
+tree(20, 22, BLOCK.OAK_LOG, BLOCK.OAK_LEAVES, 5);
+tree(28, 34, BLOCK.BIRCH_LOG, BLOCK.BIRCH_LEAVES, 6);
+tree(14, 12, BLOCK.OAK_LOG, BLOCK.OAK_LEAVES, 4);
+spruce(44, 38, 7);
+spruce(48, 30, 6);
+tree(40, 46, BLOCK.OAK_LOG, BLOCK.OAK_LEAVES, 5);
+
+// A little hut.
+const hx = 22, hz = 40, hy = heightAt(22, 40);
+for (let x = hx; x < hx + 7; x++) for (let z = hz; z < hz + 6; z++) {
+  for (let y = hy; y <= hy + 4; y++) set(x, y, z, 0);
+  set(x, hy, z, BLOCK.OAK_PLANKS);
+  for (let y = hy + 1; y <= hy + 3; y++) {
+    const wall = x === hx || x === hx + 6 || z === hz || z === hz + 5;
+    if (!wall) continue;
+    const corner = (x === hx || x === hx + 6) && (z === hz || z === hz + 5);
+    let id = corner ? BLOCK.OAK_LOG : y === hy + 1 ? BLOCK.COBBLESTONE : BLOCK.OAK_PLANKS;
+    if (y === hy + 2 && !corner && (x === hx + 2 || x === hx + 4) && z === hz + 5) id = BLOCK.GLASS;
+    set(x, y, z, id);
+  }
+  set(x, hy + 4, z, (x + z) % 2 ? BLOCK.STONE_BRICKS : BLOCK.BRICKS);
+}
+set(hx + 3, hy + 1, hz + 5, 0); set(hx + 3, hy + 2, hz + 5, 0);
+set(hx + 1, hy + 1, hz + 4, BLOCK.CRAFTING_TABLE);
+set(hx + 5, hy + 1, hz + 4, BLOCK.FURNACE);
+// Showcase row of blocks on a cobblestone base, in front of the camera.
+const show = ['TNT', 'BOOKSHELF', 'PUMPKIN', 'JACK_O_LANTERN', 'GLOWSTONE', 'IRON_BLOCK', 'GOLD_BLOCK', 'DIAMOND_BLOCK',
+  'LAPIS_BLOCK', 'COAL_BLOCK', 'OBSIDIAN', 'SANDSTONE', 'MOSSY_COBBLESTONE', 'MOSSY_STONE_BRICKS', 'CRACKED_STONE_BRICKS',
+  'ICE', 'SNOW_BLOCK', 'CLAY', 'DIORITE', 'RED_WOOL', 'LIME_WOOL', 'LIGHT_BLUE_WOOL', 'YELLOW_WOOL', 'MAGENTA_WOOL'];
+show.forEach((n, k) => {
+  const x = 18 + (k % 12) * 2, z = 52 + Math.floor(k / 12) * 2;
+  const g = heightAt(x, z);
+  set(x, g + 1, z, BLOCK[n]);
+});
+set(16, heightAt(16, 52) + 1, 52, BLOCK.TORCH);
+// Cactus on the sand, plants on the grass.
+for (const [x, z] of [[33, 9], [40, 22]]) {
+  const g = heightAt(x, z) <= WATER ? Math.min(heightAt(x, z), 9) : heightAt(x, z);
+  if (get(x, g, z) === BLOCK.SAND) { set(x, g + 1, z, BLOCK.CACTUS); set(x, g + 2, z, BLOCK.CACTUS); }
+}
+const plants = [BLOCK.SHORT_GRASS, BLOCK.SHORT_GRASS, BLOCK.SHORT_GRASS, BLOCK.FERN, BLOCK.DANDELION, BLOCK.POPPY,
+  BLOCK.CORNFLOWER, BLOCK.OXEYE_DAISY, BLOCK.RED_MUSHROOM, BLOCK.BROWN_MUSHROOM, BLOCK.OAK_SAPLING];
+for (let k = 0; k < 260; k++) {
+  const x = Math.floor(rnd() * W), z = Math.floor(rnd() * D);
+  const g = heightAt(x, z);
+  if (get(x, g, z) === BLOCK.GRASS_BLOCK && !get(x, g + 1, z)) set(x, g + 1, z, plants[Math.floor(rnd() * plants.length)]);
+}
+for (const [x, z] of [[30, 12], [31, 12], [42, 15]]) {
+  const g = heightAt(x, z);
+  if (get(x, g, z) === BLOCK.GRASS_BLOCK) for (let y = 1; y <= 3; y++) set(x, g + y, z, BLOCK.SUGAR_CANE);
+}
+
+// ---------------------------------------------------------------- meshing
+const FACES = [
+  { n: [1, 0, 0], c: [[1, 1, 1], [1, 0, 1], [1, 0, 0], [1, 1, 0]] },
+  { n: [-1, 0, 0], c: [[0, 1, 0], [0, 0, 0], [0, 0, 1], [0, 1, 1]] },
+  { n: [0, 1, 0], c: [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]] },
+  { n: [0, -1, 0], c: [[0, 0, 1], [0, 0, 0], [1, 0, 0], [1, 0, 1]] },
+  { n: [0, 0, 1], c: [[0, 1, 1], [0, 0, 1], [1, 0, 1], [1, 1, 1]] },
+  { n: [0, 0, -1], c: [[1, 1, 0], [1, 0, 0], [0, 0, 0], [0, 1, 0]] },
+];
+const UV = [[0, 0], [0, 1], [1, 1], [1, 0]];
+const MODE = { opaque: 0, tintmask: 1, cutout: 2, translucent: 3 };
+const tintOf = (id) => {
+  switch (TINT_TYPE[id]) {
+    case TINT.GRASS: return DEFAULT_TINTS.grass;
+    case TINT.FOLIAGE: return DEFAULT_TINTS.foliage;
+    case TINT.BIRCH: return DEFAULT_TINTS.birch;
+    case TINT.SPRUCE: return DEFAULT_TINTS.spruce;
+    default: return [255, 255, 255];
+  }
+};
+const buckets = { opaque: [], cutout: [], translucent: [] };
+function quad(bucket, pts, uvs, layer, shade, tint, mode, anim) {
+  const order = [0, 1, 2, 0, 2, 3];
+  for (const k of order) {
+    const p = pts[k], t = uvs[k];
+    bucket.push(p[0], p[1], p[2], t[0], t[1], layer, shade, tint[0] / 255, tint[1] / 255, tint[2] / 255, mode, anim);
+  }
+}
+for (let y = 0; y < H; y++) for (let z = 0; z < D; z++) for (let x = 0; x < W; x++) {
+  const id = get(x, y, z);
+  if (!id) continue;
+  const rt = RENDER_TYPE[id];
+  const tint = tintOf(id);
+  const layerKind = RENDER_LAYER[id] === LAYER.OPAQUE ? 'opaque' : RENDER_LAYER[id] === LAYER.CUTOUT ? 'cutout' : 'translucent';
+  if (rt === RENDER.CROSS) {
+    const L = FACE_LAYERS[id * 6];
+    const a = 0.15, b = 0.85;
+    const planes = [[[x + a, y + 1, z + a], [x + a, y, z + a], [x + b, y, z + b], [x + b, y + 1, z + b]],
+      [[x + a, y + 1, z + b], [x + a, y, z + b], [x + b, y, z + a], [x + b, y + 1, z + a]]];
+    for (const pl of planes) quad(buckets.cutout, pl, UV, L, FACE_SHADE[6], tint, MODE.cutout, 0);
+    continue;
+  }
+  if (rt === RENDER.TORCH) {
+    const L = FACE_LAYERS[id * 6];
+    const x0 = x + 7 / 16, x1 = x + 9 / 16, z0 = z + 7 / 16, z1 = z + 9 / 16, y1 = y + 10 / 16;
+    const sideUV = [[7, 6], [7, 16], [9, 16], [9, 6]].map(([u, v]) => [u / 16, v / 16]);
+    const sides = [[[x1, y1, z1], [x1, y, z1], [x1, y, z0], [x1, y1, z0]], [[x0, y1, z0], [x0, y, z0], [x0, y, z1], [x0, y1, z1]],
+      [[x0, y1, z1], [x0, y, z1], [x1, y, z1], [x1, y1, z1]], [[x1, y1, z0], [x1, y, z0], [x0, y, z0], [x0, y1, z0]]];
+    sides.forEach((pl, k) => quad(buckets.cutout, pl, sideUV, L, FACE_SHADE[[0, 1, 4, 5][k]], tint, MODE.cutout, 0));
+    quad(buckets.cutout, [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
+      [[7, 6], [7, 8], [9, 8], [9, 6]].map(([u, v]) => [u / 16, v / 16]), L, 1, tint, MODE.cutout, 0);
+    continue;
+  }
+  for (let f = 0; f < 6; f++) {
+    const n = FACES[f].n;
+    const nb = get(x + n[0], y + n[1], z + n[2]);
+    if (IS_OPAQUE[nb]) continue;
+    if (CULL_SAME[id] && nb === id) continue;
+    const liquid = rt === RENDER.LIQUID;
+    if (liquid && nb === id) continue;
+    let top = 1;
+    if (liquid && get(x, y + 1, z) !== id) top = 14 / 16;
+    const inset = rt === RENDER.CACTUS && f !== 2 && f !== 3 ? 1 / 16 : 0;
+    const pts = FACES[f].c.map(([cx, cy, cz]) => [
+      x + cx - n[0] * inset, y + (cy === 1 ? top : 0), z + cz - n[2] * inset,
+    ]);
+    const L = FACE_LAYERS[id * 6 + f];
+    const uvs = f >= 2 && f <= 3 ? UV : UV.map(([u, v]) => [u, v === 0 ? 1 - top : 1]);
+    const mode = MODE[modes[L]];
+    quad(buckets[layerKind], pts, uvs, L, FACE_SHADE[f], tint, mode, liquid ? 1 : 0);
+  }
+}
+
+// ---------------------------------------------------------------- GL
+const vs = `#version 300 es
+layout(location=0) in vec3 aPos; layout(location=1) in vec2 aUV; layout(location=2) in float aLayer;
+layout(location=3) in float aShade; layout(location=4) in vec3 aTint; layout(location=5) in float aMode; layout(location=6) in float aAnim;
+uniform mat4 uMVP; uniform float uFrame; uniform vec3 uCam;
+out vec3 vUV; out float vShade; out vec3 vTint; flat out int vMode; out float vDist;
+void main() {
+  gl_Position = uMVP * vec4(aPos, 1.0);
+  vUV = vec3(aUV, aLayer + (aAnim > 0.5 ? uFrame : 0.0));
+  vShade = aShade; vTint = aTint; vMode = int(aMode + 0.5); vDist = distance(aPos, uCam);
+}`;
+const fs = `#version 300 es
+precision highp float; precision highp sampler2DArray;
+uniform sampler2DArray uTex; uniform vec3 uFog; uniform float uFogStart, uFogEnd;
+in vec3 vUV; in float vShade; in vec3 vTint; flat in int vMode; in float vDist;
+out vec4 outColor;
+void main() {
+  vec4 t = texture(uTex, vUV);
+  vec3 rgb; float a = 1.0;
+  if (vMode == 1) rgb = t.rgb * mix(vTint, vec3(1.0), t.a);
+  else if (vMode == 2) { if (t.a < 0.5) discard; rgb = t.rgb * vTint; }
+  else if (vMode == 3) { rgb = t.rgb * vTint; a = t.a; }
+  else rgb = t.rgb;
+  rgb *= vShade;
+  float fog = clamp((vDist - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
+  outColor = vec4(mix(rgb, uFog, fog), a);
+}`;
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
+gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+function makeVAO(list) {
+  const vao = gl.createVertexArray();
+  gl.bindVertexArray(vao);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(list), gl.STATIC_DRAW);
+  const stride = 12 * 4;
+  const attrs = [[0, 3, 0], [1, 2, 3], [2, 1, 5], [3, 1, 6], [4, 3, 7], [5, 1, 10], [6, 1, 11]];
+  for (const [loc, size, off] of attrs) {
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride, off * 4);
+  }
+  return { vao, count: list.length / 12 };
+}
+const meshes = { opaque: makeVAO(buckets.opaque), cutout: makeVAO(buckets.cutout), translucent: makeVAO(buckets.translucent) };
+
+function perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2), nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
+}
+function lookAt(e, c, up) {
+  const z = norm(sub(e, c)), x = norm(cross(up, z)), y = cross(z, x);
+  return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, e), -dot(y, e), -dot(z, e), 1];
+}
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = (a) => { const l = Math.hypot(...a); return [a[0] / l, a[1] / l, a[2] / l]; };
+function mul(a, b) {
+  const o = new Array(16).fill(0);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) o[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k];
+  return o;
+}
+const views = {
+  near: { eye: [20, 21, 63], at: [26, 13, 42], fov: 70 },
+  far: { eye: [-14, 34, 70], at: [30, 10, 24], fov: 60 },
+  top: { eye: [28, 60, 60], at: [28, 8, 26], fov: 60 },
+  ground: { eye: [26, 15.3, 30], at: [36, 12.5, 8], fov: 70 },
+};
+const v = views[VIEW] ?? views.near;
+const mvp = mul(perspective((v.fov * Math.PI) / 180, canvas.width / canvas.height, 0.05, 400), lookAt(v.eye, v.at, [0, 1, 0]));
+const sky = [0.62, 0.75, 1.0];
+gl.viewport(0, 0, canvas.width, canvas.height);
+gl.clearColor(...sky, 1);
+gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+gl.enable(gl.DEPTH_TEST);
+gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uMVP'), false, mvp);
+gl.uniform1f(gl.getUniformLocation(prog, 'uFrame'), Math.floor(TIME * 8) % 16);
+gl.uniform3fv(gl.getUniformLocation(prog, 'uCam'), v.eye);
+gl.uniform3fv(gl.getUniformLocation(prog, 'uFog'), sky);
+gl.uniform1f(gl.getUniformLocation(prog, 'uFogStart'), 60);
+gl.uniform1f(gl.getUniformLocation(prog, 'uFogEnd'), 110);
+gl.uniform1i(gl.getUniformLocation(prog, 'uTex'), 0);
+gl.disable(gl.CULL_FACE);
+gl.bindVertexArray(meshes.opaque.vao); gl.drawArrays(gl.TRIANGLES, 0, meshes.opaque.count);
+gl.bindVertexArray(meshes.cutout.vao); gl.drawArrays(gl.TRIANGLES, 0, meshes.cutout.count);
+gl.enable(gl.BLEND);
+gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+gl.bindVertexArray(meshes.translucent.vao); gl.drawArrays(gl.TRIANGLES, 0, meshes.translucent.count);
+const err = gl.getError();
+if (err) console.error('GL error', err);
+document.getElementById('info').textContent =
+  `${tex.layers} layers · ${mips.length} mip levels · quads ${(meshes.opaque.count + meshes.cutout.count + meshes.translucent.count) / 6}`;
+gl.finish();
+window.__done = true;
+</script>
+</body>
+</html>

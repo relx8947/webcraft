@@ -1,0 +1,7 @@
+[
+  {"eval": "window.__game.debug.hideHud(true); window.__game.setTime(6000); true"},
+  {"eval": "(async () => { const g = window.__game; const m = await import('/src/game/mobs.js'); window.__mobs = m; const p = g.player; const types = ['pig','cow','sheep','chicken','zombie','skeleton','creeper','spider']; const out = []; for (let i = 0; i < types.length; i++) { const x = Math.floor(p.x) + (i - 3.5) * 1.8 + 0.5; const z = Math.floor(p.z) - 7 + 0.5; const top = g.world.getTopY(Math.floor(x), Math.floor(z)); const mob = m.spawnMob(g, types[i], x, top + 1, z, { persistent: true, yaw: Math.PI }); out.push(types[i] + '@' + top + (mob ? '' : ' FAILED')); } g.debug.lookDeg(0, -18); return out.join(' '); })()"},
+  {"sleep": 1500},
+  {"screenshot": "tools/out/mobs/game-lineup.png"},
+  {"eval": "window.__game.entities.list.filter(e => e.type === 'mob').map(m => m.mobType + ':' + m.x.toFixed(1) + ',' + m.y.toFixed(1) + ',' + m.z.toFixed(1) + (m.frozen ? ' FROZEN' : '')).join(' | ')"}
+]

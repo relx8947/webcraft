@@ -1,0 +1,10 @@
+[
+  {"waitFor": "window.__ready", "timeout": 90000},
+  {"eval": "__game.debug.waitIdle(30000)"},
+  {"eval": "(()=>{const d=__game.debug; d.give('oak_log', 6); d.give('cobblestone', 20); d.give('stick', 4); d.give('iron_ingot', 3); d.give('crafting_table', 1); d.give('torch', 16); d.give('diamond_pickaxe', 1); return __game.player.inventory.slots.filter(Boolean).length})()"},
+  {"key": "KeyE"},
+  {"sleep": 500},
+  {"eval": "({screen: __game.ui.currentScreen, input: __game.input.enabled, paused: __game.paused})"},
+  {"screenshot": "tools/out/integ-inventory.png"},
+  {"eval": "(()=>{const slots=[...document.querySelectorAll('#ui-root .slot')].map(e=>{const r=e.getBoundingClientRect(); return [Math.round(r.x+r.width/2), Math.round(r.y+r.height/2)]}); return {n: slots.length, first: slots.slice(0,6), last: slots.slice(-12)}})()"}
+]
