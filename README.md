@@ -12,7 +12,7 @@
 
 ## 快速开始
 
-需要 [Node.js](https://nodejs.org) 18 或更高版本（推荐 22），以及 Chrome / Edge 120+ 或 Firefox 120+。
+需要 [Node.js](https://nodejs.org) 18 或更高版本（推荐 22），以及 Chrome / Edge 120+ 或 Firefox 120+。运行测试和 `tools/` 下的开发工具需要 Node.js 22 或更高版本（即 `package.json` 中 `engines` 声明的版本）。
 
 - **Windows**：双击 `start.bat`。它会启动本地服务器并自动打开浏览器。
 - **任意系统**：在项目目录运行：
