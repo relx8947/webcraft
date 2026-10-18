@@ -338,7 +338,7 @@ export class UIManager {
         this.enterGame();
         const motd = client.welcome?.motd;
         if (motd) this.game.addChatMessage(`§6${motd}`);
-        this.game.addChatMessage('§7按 T 聊天，输入 /list 查看在线玩家');
+        this.game.addChatMessage('§7按 T 聊天，按住 Tab 查看在线玩家');
       }
     } catch (err) {
       client.disconnect();
@@ -437,12 +437,15 @@ export class UIManager {
   }
 
   openDeath(message = '') {
+    // Multiplayer: "Alice爆炸了" like the chat line everyone else sees.
+    const name = this.game.remote?.name;
+    if (name && message.startsWith('玩家')) message = name + message.slice(2);
     if (this.screen instanceof DeathScreen) {
       this.screen.setMessage(message);
       return;
     }
     if (this.game.state !== 'playing') return;
-    this.setScreen(new DeathScreen(this, message || deathMessage('generic')));
+    this.setScreen(new DeathScreen(this, message || deathMessage('generic', name || undefined)));
   }
 
   showMessage(title, message = '', onButton = null) {

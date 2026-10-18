@@ -9,7 +9,7 @@ import { measurePixelText } from './font.js';
 import { paintLogo, paintSubtitle } from './logo.js';
 import { BLOCK } from '../world/registry.js';
 import { DEFAULT_SETTINGS } from '../config.js';
-import { statusUrl, loadSavedName } from '../net/client.js';
+import { statusUrl, loadSavedName, PUBLIC_SERVER_PAGE } from '../net/client.js';
 import { validName } from '../net/protocol.js';
 
 export const VERSION = 'WebCraft 1.1';
@@ -227,7 +227,11 @@ export class MultiplayerScreen extends MenuScreen {
     const st = await fetchServerStatus();
     if (this.ui.screen !== this) return;
     if (!st) {
-      renderFormatted(this.status, '§c暂时连不上服务器，可以稍后再试');
+      const here = location.origin + location.pathname;
+      const local = /^https?:\/\/(localhost|127\.0\.0\.1)[:/]/.test(here);
+      renderFormatted(this.status, here.startsWith(PUBLIC_SERVER_PAGE) || local
+        ? '§c暂时连不上服务器，可以稍后再试'
+        : `§c这个网址没有联机服务器 §7请打开 ${PUBLIC_SERVER_PAGE.replace(/^https:\/\//, '')}`);
       return;
     }
     renderFormatted(this.status, `§a服务器在线 §f${st.online} / ${st.max} 人${st.world ? ` · ${st.world}` : ''}`);

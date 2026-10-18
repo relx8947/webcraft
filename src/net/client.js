@@ -5,7 +5,8 @@
 //                      changes of subscribed chunks arrive as 'b' batches (buffered while a chunk loads)
 //   * remoteHooks      World `remote` option: local edits -> 'e', unloaded chunks -> 'unsub'
 //   * update(dt)       per frame (Game.update): position (20 Hz), inventory / state / record sync,
-//                      the frame's attack, chest / furnace changes, other players, name tags
+//                      the frame's attack, chest / furnace changes, other players, name tags, the
+//                      player list (held Tab) with the round-trip time (ping every 5 s)
 //   * server messages  entity states, other players, effects, damage / pushes / items for the local
 //                      player, chat, time, difficulty, containers
 import {
@@ -21,6 +22,10 @@ const TOKEN_KEY = 'webcraft-mp-tokens';
 const NAME_KEY = 'webcraft-mp-name';
 const SAVE_EVERY = 10;          // s between full player records
 const INV_EVERY = 0.25;         // s between inventory mirror updates (when changed)
+const PING_EVERY = 5;           // s between latency probes
+
+/** The page of the public server (other copies of the game, e.g. GitHub Pages, have no server). */
+export const PUBLIC_SERVER_PAGE = 'https://gservice.site/webcraft/';
 
 /** Default server URL: wss://<host><page dir>ws (https) / ws:// (http). */
 export function defaultServerUrl() {
@@ -99,6 +104,12 @@ export class MultiplayerClient {
     this._container = null;                // { be, slots: packed[], version }
     this._tags = new Map();                // ghost id -> name tag element
     this._tagLayer = null;
+    this._listEl = null;                   // player list overlay (held Tab)
+    this._listShown = false;
+    this._listTimer = 0;
+    this._pingTimer = 0;
+    /** Last measured round-trip time (ms), or null. */
+    this.rtt = null;
     this._applyingRemote = false;
 
     const self = this;
@@ -113,7 +124,9 @@ export class MultiplayerClient {
       saveWorldMeta: async () => {},
     };
     this.remoteHooks = {
-      onEdit: (x, y, z, id) => self.send({ t: 'e', x, y, z, id }),
+      // breakTool: survival break with that held item (0 = hand), the server pops the drops.
+      onEdit: (x, y, z, id, old, breakTool) => self.send(Number.isInteger(breakTool)
+        ? { t: 'e', x, y, z, id, br: breakTool } : { t: 'e', x, y, z, id }),
       onUnload: (cx, cz) => self._unsubscribe(cx, cz),
     };
   }
@@ -169,6 +182,12 @@ export class MultiplayerClient {
             this.op = !!m.op;
             saveToken(m.name, m.token);
             for (const p of m.players ?? []) this.players.join(p.id, p.n);
+            // Closing the tab: send the latest record (position, inventory) while the socket still works.
+            this._onPageHide = () => this._sendRecord();
+            globalThis.addEventListener?.('pagehide', this._onPageHide);
+            this._onKey = (ev) => this._onTabKey(ev);
+            globalThis.addEventListener?.('keydown', this._onKey, true);
+            globalThis.addEventListener?.('keyup', this._onKey, true);
             resolve(m);
           } else if (m.t === 'deny') {
             clearTimeout(timer);
@@ -215,6 +234,15 @@ export class MultiplayerClient {
     this._buffered.clear();
     this.players.clear();
     this._removeTags();
+    if (this._onPageHide) globalThis.removeEventListener?.('pagehide', this._onPageHide);
+    this._onPageHide = null;
+    if (this._onKey) {
+      globalThis.removeEventListener?.('keydown', this._onKey, true);
+      globalThis.removeEventListener?.('keyup', this._onKey, true);
+    }
+    this._onKey = null;
+    this._listEl?.remove();
+    this._listEl = null;
   }
 
   // =================================================================================================
@@ -316,6 +344,11 @@ export class MultiplayerClient {
     }
     this._flushBuffered();
     game.entities?.flushAttack?.();
+    const rd = game.settings?.renderDistance;
+    if (Number.isInteger(rd) && rd !== this.renderDistance) {
+      this.renderDistance = rd;           // entity / player replication range on the server
+      this.send({ t: 'rd', rd });
+    }
     const player = game.player;
     if (player && game.state === 'playing') {
       this._sendPosition(dt, player);
@@ -328,8 +361,18 @@ export class MultiplayerClient {
       }
       this._syncContainer();
     }
+    this._pingTimer -= dt;
+    if (this._pingTimer <= 0) {
+      this._pingTimer = PING_EVERY;
+      this.send({ t: 'ping', n: Math.round(performance.now()) });
+    }
     this.players.update(dt, game.world);
     this._updateTags();
+    if (this._listShown) {
+      if (game.state !== 'playing' || game.ui?.screen) this._listShown = false;
+      this._listTimer -= dt;
+      if (!this._listShown || this._listTimer <= 0) this._renderList();
+    }
   }
 
   _sendPosition(dt, player) {
@@ -530,6 +573,57 @@ export class MultiplayerClient {
     }
   }
 
+  // =================================================================================================
+  // Player list (held Tab)
+  // =================================================================================================
+
+  _onTabKey(e) {
+    if (e.code !== 'Tab') return;
+    const game = this.game;
+    // Open screens (chat: Tab completes commands) keep the key.
+    const show = e.type === 'keydown' && game.state === 'playing' && !game.ui?.screen;
+    if (!show && !this._listShown) return;
+    e.preventDefault();
+    if (show === this._listShown) return;
+    this._listShown = show;
+    this._renderList();
+  }
+
+  _renderList() {
+    this._listTimer = 0.5;
+    if (!this._listShown) {
+      if (this._listEl) this._listEl.style.display = 'none';
+      return;
+    }
+    if (!this._listEl) {
+      const root = document.getElementById('ui-root') ?? document.body;
+      this._listEl = document.createElement('div');
+      this._listEl.className = 'mp-list';
+      root.appendChild(this._listEl);
+    }
+    const names = [...this.players.map.values()].map((g) => g.name).sort((a, b) => a.localeCompare(b));
+    names.unshift(this.name);
+    const el = this._listEl;
+    el.replaceChildren();
+    const add = (cls, text) => {
+      const d = document.createElement('div');
+      d.className = cls;
+      d.textContent = text;
+      el.appendChild(d);
+      return d;
+    };
+    add('mp-list-title', `${this.welcome?.world?.name ?? '多人游戏'} · ${names.length} 人在线`);
+    const grid = add('mp-list-grid', '');
+    for (const n of names) {
+      const row = document.createElement('div');
+      row.className = n === this.name ? 'mp-list-name mp-list-me' : 'mp-list-name';
+      row.textContent = n;
+      grid.appendChild(row);
+    }
+    add('mp-list-foot', this.rtt === null ? '延迟测量中…' : `延迟 ${this.rtt} ms`);
+    el.style.display = '';
+  }
+
   _removeTags() {
     for (const el of this._tags.values()) el.remove();
     this._tags.clear();
@@ -654,5 +748,7 @@ const HANDLERS = {
   deny(m) {
     this.closeReason = m.r || '你已断开连接';
   },
-  pong() {},
+  pong(m) {
+    if (Number.isFinite(m.n)) this.rtt = Math.max(0, Math.round(performance.now() - m.n));
+  },
 };

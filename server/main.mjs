@@ -12,6 +12,7 @@
 //   WEBCRAFT_MAX_PLAYERS (20)  WEBCRAFT_SIM_DISTANCE (5 chunks around each player)
 //   WEBCRAFT_ORIGINS      comma-separated allowed page origins (default: gservice.site + localhost)
 //   WEBCRAFT_MOTD         line shown when joining
+//   WEBCRAFT_PVP          1 = players' arrows hurt other players (default off)
 // Behind nginx the client address comes from X-Real-IP / X-Forwarded-For (trusted from 127.0.0.1 only).
 import http from 'node:http';
 import fs from 'node:fs';
@@ -42,6 +43,7 @@ export function loadConfig(overrides = {}) {
     simDistance: Math.max(3, Math.min(8, Number(env.WEBCRAFT_SIM_DISTANCE) || 5)),
     origins: env.WEBCRAFT_ORIGINS ? list(env.WEBCRAFT_ORIGINS) : null,
     motd: env.WEBCRAFT_MOTD || '',
+    pvp: env.WEBCRAFT_PVP === '1',
     staticDir: env.WEBCRAFT_STATIC ? path.resolve(env.WEBCRAFT_STATIC) : null,
     maxPerIp: 4,
     ...overrides,

@@ -16,7 +16,7 @@ import { MobSpawner, spawnMob, MOB_TYPES } from '../src/game/mobs.js';
 import { BlockEntityManager, containerType } from '../src/game/blockentities.js';
 import { runCommand, COMMAND_LIST } from '../src/game/commands.js';
 import { DAY_TICKS, TICKS_PER_SECOND, computeDaylight } from '../src/config.js';
-import { BLOCKS, BLOCK, IS_SOLID, IS_OPAQUE } from '../src/world/registry.js';
+import { BLOCKS, BLOCK, IS_SOLID, IS_OPAQUE, IS_LIQUID, getDrops } from '../src/world/registry.js';
 import { rleEncode } from '../src/world/storage.js';
 import { WorldGenerator } from '../src/world/worldgen.js';
 import { chunkKeyNum, ChunkState } from '../src/world/chunk.js';
@@ -88,7 +88,9 @@ export class ServerGame {
     this._lastTick = 0;
     this._saving = null;
     this._rng = Math.random;
-    this._pendingEdits = [];         // edits waiting for their chunk { session, x, y, z, id, until }
+    this._pendingEdits = [];         // edits waiting for their chunk { session, x, y, z, id, breakTool, until }
+    this._counts = null;             // entityCounts() cache
+    this._countsTick = -1;
     /** Open container screens: 'x,y,z' -> { be, viewers: Set<Session>, state: string } */
     this.containers = new Map();
     this.stats = { ticks: 0, slowTicks: 0, maxTickMs: 0, lastTickMs: 0 };
@@ -372,27 +374,42 @@ export class ServerGame {
     return this.world.getBlock(x, y, z);
   }
 
-  /** Apply a client edit now or once its chunk is loaded (up to 5 s later). */
-  applyEdit(session, x, y, z, id) {
+  /**
+   * Apply a client edit now or once its chunk is loaded (up to 5 s later). `breakTool` (item id, 0 = hand)
+   * marks a survival break: the server pops the drops of the block that is really there, so a block two
+   * players break at once, or an edit the server refuses, drops nothing extra.
+   */
+  applyEdit(session, x, y, z, id, breakTool) {
     if (this.blockAt(x, y, z) < 0) {
-      this._pendingEdits.push({ session, x, y, z, id, until: this._ticks + 5 * TICKS_PER_SECOND });
+      this._pendingEdits.push({ session, x, y, z, id, breakTool, until: this._ticks + 5 * TICKS_PER_SECOND });
       return;
     }
-    this._doEdit(session, x, y, z, id);
+    this._doEdit(session, x, y, z, id, breakTool);
   }
 
-  _doEdit(session, x, y, z, id) {
+  _doEdit(session, x, y, z, id, breakTool) {
     const world = this.world;
     const before = world.getBlock(x, y, z);
     if (before === id) return;
-    if (!world.setBlock(x, y, z, id)) session.queueBlock(x, y, z, world.getBlock(x, y, z), true);
+    if (!world.setBlock(x, y, z, id)) {
+      session.queueBlock(x, y, z, world.getBlock(x, y, z));
+      return;
+    }
+    const p = session.player;
+    if (breakTool !== undefined && before !== BLOCK.AIR && !IS_LIQUID[before] && p.mode !== 'creative') {
+      for (const d of getDrops(before, breakTool, Math.random)) {
+        this.entities.popItem(d.id, d.count, x + 0.5, y + 0.5, z + 0.5);
+      }
+    }
+    // Flint and steel (or fire) on TNT: the client asks for the primed TNT right after this edit.
+    if (before === BLOCK.TNT && breakTool === undefined) session.noteTntIgnition(x, y, z);
   }
 
   _retryPendingEdits() {
     const keep = [];
     for (const e of this._pendingEdits) {
       if (!this.sessions.has(e.session)) continue;
-      if (this.blockAt(e.x, e.y, e.z) >= 0) this._doEdit(e.session, e.x, e.y, e.z, e.id);
+      if (this.blockAt(e.x, e.y, e.z) >= 0) this._doEdit(e.session, e.x, e.y, e.z, e.id, e.breakTool);
       else if (this._ticks < e.until) keep.push(e);
     }
     this._pendingEdits = keep;
@@ -455,6 +472,31 @@ export class ServerGame {
   // =================================================================================================
   // Entities
   // =================================================================================================
+
+  /**
+   * Live entities by type ('item', 'mob', 'arrow', 'tnt', ...), counted once per tick; callers that add an
+   * entity bump the count themselves.
+   */
+  entityCounts() {
+    if (this._countsTick !== this._ticks) {
+      const c = this._counts = Object.create(null);
+      for (const e of this.entities.list) if (!e.removed) c[e.type] = (c[e.type] ?? 0) + 1;
+      this._countsTick = this._ticks;
+    }
+    return this._counts;
+  }
+
+  /** Mobs within `radius` blocks (horizontal) of (x, z). */
+  mobsNear(x, z, radius) {
+    const r2 = radius * radius;
+    let n = 0;
+    for (const e of this.entities.list) {
+      if (e.type !== 'mob' || e.removed) continue;
+      const dx = e.x - x, dz = e.z - z;
+      if (dx * dx + dz * dz <= r2) n++;
+    }
+    return n;
+  }
 
   /** Entity by network id (= entity id), or null. */
   entityById(id) {

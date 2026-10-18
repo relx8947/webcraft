@@ -4,6 +4,8 @@
 
 **在线试玩：<https://relx8947.github.io/webcraft/>**（建议使用电脑上的 Edge / Chrome，需要 WebGL2）
 
+**多人联机：<https://gservice.site/webcraft/>** → 标题画面点 **多人游戏**，所有人进入同一个常驻的公共生存世界。
+
 - 纯 JavaScript ES 模块 + WebGL2，**零依赖、无需构建**。
 - 所有纹理、图标、生物皮肤、天空、声音和背景音乐都在运行时由程序生成，项目里没有任何图片或音频文件。
 - 界面为简体中文。
@@ -28,6 +30,18 @@
 点击画面可以锁定鼠标；按 **Esc** 打开游戏菜单（同时会保存世界）。世界每 30 秒自动保存，切换标签页、关闭页面或“保存并退出到标题画面”时也会保存。存档放在浏览器的 IndexedDB 中。
 
 > 必须通过 `node server.js` 访问：直接双击 `index.html`（`file://` 协议）时，浏览器不允许加载 ES 模块和 Web Worker。
+
+### 多人联机
+
+标题画面的 **多人游戏** 会连接页面所在网站的联机服务器（公共服务器在 <https://gservice.site/webcraft/>）。输入名字就能进入一个所有人共享的生存世界：方块、箱子、熔炉、生物和时间都是同步的，背包和位置保存在服务器上。名字会绑定到第一次使用它的浏览器。按住 **Tab** 查看在线玩家，**T** 聊天。
+
+自己搭服务器：
+
+```
+WEBCRAFT_STATIC=. WEBCRAFT_ADMIN_KEY=你的口令 node server/main.mjs
+```
+
+然后打开 <http://127.0.0.1:8787/>。在游戏里输入 `/login 你的口令` 成为管理员。服务器的配置、权限、校验规则和网络协议见 [docs/MULTIPLAYER.md](docs/MULTIPLAYER.md)。
 
 ### 第一晚生存指南
 
@@ -56,6 +70,7 @@
 | E | 打开 / 关闭物品栏 |
 | Q / Ctrl+Q | 丢弃一个物品 / 丢弃整组 |
 | T | 聊天 |
+| 按住 Tab | 多人游戏：查看在线玩家和延迟 |
 | / | 输入命令 |
 | Esc | 游戏菜单（暂停并保存；“操作说明...”列出所有按键） |
 | F1 | 隐藏界面 |
@@ -155,7 +170,7 @@ http://127.0.0.1:8080/?autostart=1&seed=42&mode=creative&type=flat&rd=8&time=noo
 ## 开发与测试
 
 ```
-npm test                         # Node 单元测试（node --test "tests/*.test.js"），共 524 项
+npm test                         # Node 单元测试（node --test "tests/*.test.js"），共 529 项（含联机服务器测试）
 node tools/harness.mjs --url "index.html?autostart=1&seed=42" --wait-for "window.__ready" --screenshot tools/out/game.png
 node tools/harness.mjs --url "index.html?autostart=1&seed=42" --wait-for "window.__ready" --steps tools/steps/w2-hostile.json
 node tools/run-steps.mjs -j 3 tools/steps/w2-*.json      # 并行运行多个脚本并汇总结果
@@ -202,10 +217,13 @@ src/game/
   inventory.js, crafting.js    物品栏、合成和熔炼配方
   commands.js, audio.js        聊天命令；程序合成音效与音乐
 src/ui/                        标题、菜单、HUD、物品栏、熔炉 / 箱子界面、聊天、调试界面
+src/net/                       多人联机客户端：协议、连接与区块订阅、实体和其他玩家的副本
+server/                        多人联机专用服务器（Node，零依赖）：WebSocket、权威模拟、校验、磁盘存档
 src/util/                      数学、噪声
 tests/                         Node 单元测试
 tools/                         测试工具和各模块测试页
 docs/SPEC.md, docs/SPEC-wave2.md, docs/notes/   架构规格与各模块设计说明
+docs/MULTIPLAYER.md            多人联机：架构、部署、权限、校验与协议
 ```
 
 ## 已知限制

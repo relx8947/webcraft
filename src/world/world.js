@@ -472,6 +472,8 @@ export class World {
   /**
    * Change a block. Updates heightmap / light dirtiness / save state, notifies onBlockChanged listeners
    * and (unless update === false) runs block updates (support popping, falling sand).
+   * Replica worlds: { remote: true } marks a change that came from the server; { breakTool } (item id)
+   * reports a survival break whose drops the server pops.
    * @returns {boolean} false if the chunk is not loaded, y is out of range or id is not a block
    */
   setBlock(x, y, z, id, opts) {
@@ -501,7 +503,7 @@ export class World {
     if (this._listeners.length > 0) this._emitChange(x, y, z, old, id);
     if (this.remote !== null) {
       // Replica: the server runs the block updates and sends their results.
-      if (!opts || opts.remote !== true) this.remote.onEdit(x, y, z, id, old);
+      if (!opts || opts.remote !== true) this.remote.onEdit(x, y, z, id, old, opts?.breakTool);
       return true;
     }
     if (!opts || opts.update !== false) {

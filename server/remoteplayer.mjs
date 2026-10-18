@@ -109,6 +109,8 @@ export class RemotePlayer {
   /** Mobs, arrows and explosions hurt the player: the client applies it (armor, hurt cooldown, death). */
   damage(amount, cause = 'generic', message, attacker = null) {
     if (this.dead || !(amount > 0) || this.mode === 'creative') return false;
+    const src = attacker?.shooter ?? attacker;
+    if (src?.isPlayer && src !== this && !this.session.server?.config?.pvp) return false;
     const a = describeAttacker(attacker);
     if (attacker) this.lastAttacker = attacker;
     this.send({ t: 'hurt', a: Math.round(amount * 100) / 100, c: cause, m: typeof message === 'string' ? message : undefined, by: a });

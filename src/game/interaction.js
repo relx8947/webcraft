@@ -583,13 +583,15 @@ export class Interaction {
       const below = world.getBlock(x, y - 1, z);
       if (IS_SOLID[below] || IS_LIQUID[below]) replacement = BLOCK.WATER;
     }
-    if (!world.setBlock(x, y, z, replacement)) return false;
+    const stack = drops && player ? player.getSelectedStack() : null;
+    const toolId = stack ? stack.id : 0;
+    // Multiplayer: the server pops the drops of the block that was really there (breakTool).
+    const remote = !!game.remote;
+    if (!world.setBlock(x, y, z, replacement, remote && drops ? { breakTool: toolId } : undefined)) return false;
     game.particles?.spawnBlockBreak?.(x, y, z, id);
     game.audio?.playBlock?.('break', BLOCKS[id].sound, x + 0.5, y + 0.5, z + 0.5);
     if (drops && player) {
-      const stack = player.getSelectedStack();
-      const toolId = stack ? stack.id : 0;
-      for (const d of getDrops(id, toolId, Math.random)) this._popItem(d.id, d.count, x, y, z);
+      if (!remote) for (const d of getDrops(id, toolId, Math.random)) this._popItem(d.id, d.count, x, y, z);
       const tool = stack ? getItem(stack.id)?.tool : null;
       if (tool && BLOCKS[id].hardness > 0) this._damageHeldItem(player, tool.type === 'sword' ? 2 : 1);
       player.addExhaustion?.(0.005);
@@ -910,10 +912,11 @@ export class Interaction {
       // Minecraft BucketItem.emptyContents: liquids also replace non-solid blocks (torches, flowers,
       // crops), which drop as items.
       if (IS_SOLID[cur] || BLOCKS[cur].interact || RENDER_TYPE[cur] === RENDER.NONE) return false;
-      for (const d of getDrops(cur, 0, Math.random)) this._popItem(d.id, d.count, x, y, z);
+      if (!this.game.remote) for (const d of getDrops(cur, 0, Math.random)) this._popItem(d.id, d.count, x, y, z);
     }
     const liquid = itemId === ITEM.LAVA_BUCKET ? BLOCK.LAVA : BLOCK.WATER;
-    if (!world.setBlock(x, y, z, liquid)) return false;
+    const opts = this.game.remote && cur !== BLOCK.AIR && !IS_REPLACEABLE[cur] ? { breakTool: 0 } : undefined;
+    if (!world.setBlock(x, y, z, liquid, opts)) return false;
     this.game.audio?.playBlock?.('place', BLOCKS[liquid].sound, x + 0.5, y + 0.5, z + 0.5);
     if (player.mode !== 'creative') player.inventory.set(player.selectedSlot, makeStack(ITEM.BUCKET, 1));
     this._afterUse(player, false);

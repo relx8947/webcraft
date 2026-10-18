@@ -6,6 +6,7 @@ import {
   PROTOCOL_VERSION, CHAT_MAX, validName, packStack, unpackStack, sameStack, q2, qa,
 } from '../src/net/protocol.js';
 import { BLOCKS, BLOCK, VALID_BLOCK_IDS, IS_LIQUID } from './blocks-allowed.mjs';
+import { ITEM, getItem } from '../src/world/registry.js';
 import { MOB_TYPES } from '../src/game/mobs.js';
 import { COMMAND_LIST } from '../src/game/commands.js';
 import { chunkKeyNum } from '../src/world/chunk.js';
@@ -16,6 +17,12 @@ const REACH = 8;                         // max distance eye -> block centre for
 const ENTITY_REACH = 7;
 const MAX_SUBS = 2000;
 const VIEW_MAX = 16;
+/** Server-wide caps on entities players add (operators are exempt). */
+const ENTITY_CAPS = { item: 800, arrow: 300, tnt: 48, mob: 500 };
+const LOCAL_MOB_CAP = 80;                // mobs within 32 blocks of a player using a spawn egg
+const HAND_DAMAGE = 1;
+const CRIT_MULTIPLIER = 1.5;
+const ARROW_DAMAGE = 2;
 
 /** Token bucket rate limiter. */
 class Bucket {
@@ -76,6 +83,7 @@ export class Session {
     };
     this._helloTimer = setTimeout(() => this.close(4000, '握手超时'), HELLO_TIMEOUT_MS);
     this._lastRecord = null;
+    this._ignitions = [];            // TNT blocks this player just lit [{ x, y, z, at }]
     ws.on('message', (data, isBinary) => this._onMessage(data, isBinary));
     ws.on('close', () => this._onClose());
   }
@@ -293,6 +301,48 @@ export class Session {
   get isOp() {
     return this.server.isOp(this.player.name);
   }
+
+  /** Operators and creative players may spawn things without having them. */
+  get privileged() {
+    return this.player.mode === 'creative' || this.isOp;
+  }
+
+  /** The player just lit the TNT block at (x, y, z): one primed TNT may follow (see HANDLERS.s). */
+  noteTntIgnition(x, y, z) {
+    const now = performance.now();
+    this._ignitions = this._ignitions.filter((i) => now - i.at < 2000);
+    if (this._ignitions.length < 16) this._ignitions.push({ x, y, z, at: now });
+  }
+
+  _takeIgnition(x, y, z) {
+    const now = performance.now();
+    const i = this._ignitions.findIndex((g) => now - g.at < 2000 &&
+      Math.abs(g.x + 0.5 - x) <= 1.5 && Math.abs(g.y - y) <= 1.5 && Math.abs(g.z + 0.5 - z) <= 1.5);
+    if (i < 0) return false;
+    this._ignitions.splice(i, 1);
+    return true;
+  }
+
+  /** True if the mirrored inventory holds an item matching `test(stack, item)` (hotbar only with hotbar). */
+  _has(test, hotbar = false) {
+    const slots = this.player.inventory.slots;
+    for (let i = 0, n = hotbar ? 9 : slots.length; i < n; i++) {
+      const s = slots[i];
+      if (s && s.count > 0 && test(s, getItem(s.id))) return true;
+    }
+    return false;
+  }
+
+  /** Strongest hit the player can deal with what is in its hotbar (tool damage, critical). */
+  _maxAttackDamage() {
+    let best = HAND_DAMAGE;
+    const slots = this.player.inventory.slots;
+    for (let i = 0; i < 9; i++) {
+      const tool = slots[i] ? getItem(slots[i].id)?.tool : null;
+      if (tool && tool.damage > best) best = tool.damage;
+    }
+    return best * CRIT_MULTIPLIER + 0.01;
+  }
 }
 
 // =================================================================================================
@@ -379,7 +429,10 @@ const HANDLERS = {
     if (!this._limits.edit.take() || this.player.dead) return reject();
     if (!VALID_BLOCK_IDS[id] && !(this.isOp && BLOCKS[id])) return reject();
     if (!this._inReach(x + 0.5, y + 0.5, z + 0.5, REACH) && !this.isOp) return reject();
-    server.applyEdit(this, x, y, z, id);
+    // br: survival break with that held item; drops are computed here (any tool the player really has).
+    let breakTool;
+    if (int(m.br)) breakTool = m.br > 0 && this._has((s) => s.id === m.br) ? m.br : 0;
+    server.applyEdit(this, x, y, z, id, breakTool);
   },
 
   /** Entity spawns caused by the player: item drops, arrows, lit TNT, spawn eggs. */
@@ -392,29 +445,47 @@ const HANDLERS = {
     const [x, y, z] = pos;
     if (!this._inReach(x, y, z, 10)) return;
     const v = Array.isArray(m.v) ? m.v.map((n) => (finite(n) ? Math.max(-80, Math.min(80, n)) : 0)) : [0, 0, 0];
-    switch (m.k) {
+    if (p.dead) return;
+    // Survival players need an arrow / a spawn egg / a TNT block they just lit; only operators go past the
+    // caps. (The client owns its inventory, so these checks keep play consistent rather than cheat-proof.)
+    const op = this.isOp;
+    const free = this.privileged;
+    const counts = server.entityCounts();
+    const kind = m.k === 'item' ? 'item' : m.k === 'arrow' ? 'arrow' : m.k === 'tnt' ? 'tnt' : m.k === 'mob' ? 'mob' : null;
+    if (!kind || (!op && (counts[kind] ?? 0) >= ENTITY_CAPS[kind])) return;
+    switch (kind) {
       case 'item': {
         const stack = unpackStack(m.s);
-        if (!stack) return;
+        // Thrown items are not checked against the mirror: an item straight off the crafting grid or the
+        // cursor may not have been synced yet, and refusing the throw would lose it.
+        if (!stack || !getItem(stack.id)) return;
         const delay = finite(m.d) ? Math.max(0, Math.min(10, m.d)) : undefined;
         server.entities.spawnItem(stack, x, y, z, v[0], v[1], v[2], delay);
         break;
       }
       case 'arrow': {
-        const damage = finite(m.dmg) ? Math.max(0, Math.min(10, m.dmg)) : 2;
-        server.entities.spawnArrow(x, y, z, v[0], v[1], v[2], { shooter: p, damage, critical: !!m.crit, pickup: !!m.pick });
+        if (!free && !this._has((s) => s.id === ITEM.ARROW)) return;
+        const damage = op && finite(m.dmg) ? Math.max(0, Math.min(10, m.dmg)) : ARROW_DAMAGE;
+        server.entities.spawnArrow(x, y, z, v[0], v[1], v[2], { shooter: p, damage, critical: !!m.crit, pickup: !!m.pick && p.mode !== 'creative' });
         break;
       }
       case 'tnt':
+        if (!free && !this._takeIgnition(x, y, z)) return;
         server.entities.spawnPrimedTnt(x, y, z, finite(m.f) ? Math.max(0.5, Math.min(8, m.f)) : undefined);
         break;
       case 'mob': {
         if (!MOB_TYPES[m.mt]) return;
+        if (!free && !this._has((s, it) => it?.spawnMob === m.mt)) return;
+        if (!op && server.mobsNear(x, z, 32) >= LOCAL_MOB_CAP) {
+          this.send({ t: 'chat', m: '§c附近的生物太多了', c: '#FF5555' });
+          return;
+        }
         server.spawnMob(m.mt, x, y, z, { persistent: !!m.ps, yaw: finite(m.yaw) ? m.yaw : undefined });
         break;
       }
       default:
     }
+    counts[kind] = (counts[kind] ?? 0) + 1;
   },
 
   /** The player hit an entity. */
@@ -422,7 +493,8 @@ const HANDLERS = {
     if (!int(m.id) || !this._limits.attack.take() || this.player.dead) return;
     const e = this.server.entityById(m.id);
     if (!e || !this._inReach(e.x, e.y + (e.height || 1) / 2, e.z, ENTITY_REACH)) return;
-    const dmg = finite(m.d) ? Math.max(0, Math.min(30, m.d)) : 1;
+    const cap = this.privileged ? 30 : this._maxAttackDamage();
+    const dmg = finite(m.d) ? Math.max(0, Math.min(cap, m.d)) : HAND_DAMAGE;
     e.hurt(dmg, 'player', this.player);
     if (Array.isArray(m.kb) && typeof e.push === 'function') {
       const k = m.kb.map((n) => (finite(n) ? Math.max(-20, Math.min(20, n)) : 0));
@@ -484,7 +556,7 @@ const HANDLERS = {
       this.send({ t: 'chat', m: '§c你说话太快了，休息一下吧', c: '#FF5555' });
       return;
     }
-    text = text.replace(/§/g, '');
+    text = text.replace(/§.?/g, '');
     this.server.chat(`<${this.player.name}> ${text}`);
   },
 
@@ -665,13 +737,13 @@ function runServerCommand(session, text) {
       break;
     }
     case 'me': {
-      const text2 = args.join(' ').replace(/§/g, '').slice(0, CHAT_MAX);
+      const text2 = args.join(' ').replace(/§.?/g, '').slice(0, CHAT_MAX);
       if (!text2) return say(session, '用法：/me <动作>');
       server.chat(`* ${p.name} ${text2}`);
       return;
     }
     case 'say': {
-      const text2 = args.join(' ').replace(/§/g, '').slice(0, CHAT_MAX);
+      const text2 = args.join(' ').replace(/§.?/g, '').slice(0, CHAT_MAX);
       if (!text2) return say(session, '用法：/say <消息>');
       server.chat(`§d[${p.name}] ${text2}`);
       return;

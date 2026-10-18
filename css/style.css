@@ -1168,6 +1168,46 @@ body {
   white-space: nowrap;
   will-change: transform;
 }
+.mp-list {
+  position: absolute;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 260px;
+  max-width: min(720px, 92vw);
+  padding: 8px 10px 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font: 15px/1.35 "Microsoft YaHei", "PingFang SC", sans-serif;
+  text-align: center;
+  pointer-events: none;
+  z-index: 5;
+}
+.mp-list-title {
+  margin-bottom: 6px;
+  color: #ffff55;
+}
+.mp-list-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 2px 6px;
+  text-align: left;
+}
+.mp-list-name {
+  padding: 1px 6px;
+  background: rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mp-list-me {
+  color: #55ffff;
+}
+.mp-list-foot {
+  margin-top: 6px;
+  color: #aaa;
+  font-size: 13px;
+}
 .screen-multiplayer .mp-status,
 .screen-multiplayer .mp-players {
   text-align: center;
