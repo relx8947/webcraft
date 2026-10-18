@@ -29,6 +29,14 @@
 // cane / cactus growth, plants that lost their support, wheat growth, farmland hydration, ice melting),
 // onChunkGenerated callbacks (first generation of a chunk only — remembered across sessions in storage),
 // saving in batches.
+//
+// Multiplayer (docs/MULTIPLAYER.md):
+//   remote    client replica of a server world: chunks come through `storage` (the network chunk source),
+//             no simulation (liquids, block updates and random ticks run on the server), local edits are
+//             applied at once and reported to `remote.onEdit`, changes from the server use
+//             setBlock(..., { remote: true }); unloaded chunks are reported to `remote.onUnload`.
+//   lightOnly headless world (dedicated server): mesh jobs compute light only.
+//   setViewers([{ x, z, rd }])  streams around several players (dedicated server) instead of one position.
 
 import { CHUNK_VOLUME, skyLightLevelAt } from '../config.js';
 import {
@@ -165,11 +173,14 @@ export class World {
    * @param {number} [options.maxMeshJobs] mesh jobs (tiers 1-2) outstanding at once
    * @param {WorldGenerator} [options.generator] main-thread generator (default: created lazily)
    * @param {number} [options.fluidBudgetMs] time budget of liquid updates per tick (default 2 ms)
+   * @param {{ onEdit: Function, onUnload?: Function }|null} [options.remote] client replica of a server world
+   * @param {boolean} [options.lightOnly] headless: mesh jobs compute light only (no geometry)
    */
   constructor({
     seed = 0, worldType = 'default', worldId = 'world', storage = null, pool, renderer = null,
     renderDistance = 8, smoothLighting = true, onDropItem = null, onFallingBlock = null, onEffect = null,
     onBlockPopped = null, uploadBudgetMs = 4, tickRadius = 8, maxMeshJobs, generator = null, fluidBudgetMs = 2,
+    remote = null, lightOnly = false,
   } = {}) {
     if (!pool || typeof pool.submit !== 'function') throw new TypeError('World needs a WorkerPool (options.pool)');
     this.seed = seed >>> 0;
@@ -189,6 +200,11 @@ export class World {
     this.uploadBudgetMs = uploadBudgetMs;
     this.tickRadius = tickRadius;
     this.maxMeshJobs = maxMeshJobs ?? Math.max(4, (pool.size || 2) * 3);
+    /** Client replica of a server world (see the header), or null. */
+    this.remote = remote && typeof remote.onEdit === 'function' ? remote : null;
+    this.lightOnly = !!lightOnly;
+    /** Several streaming centres [{ x, z, rd }] (dedicated server), or null for the single player position. */
+    this._viewers = null;
 
     this._owner = nextOwner++;
     this._generator = generator;
@@ -203,7 +219,7 @@ export class World {
     this._needSets = true;
     this._newChunks = [];
     this._storageLoads = 0;
-    this.maxStorageLoads = 24;
+    this.maxStorageLoads = this.remote ? 64 : 24;       // network round trips overlap better
     this._savedKeys = new Set();            // null = unknown index (always try storage first)
 
     // meshing state
@@ -216,6 +232,7 @@ export class World {
     this._uploadList = [];
     this._buffers = [];
     this._range = {};
+    this._multi = { f: 0, d: 0 };            // _classifyMulti result
 
     // persistence
     this._unloadSaves = new Map();          // 'cx,cz' -> { cx, cz, blocks } of unloaded modified chunks
@@ -365,7 +382,11 @@ export class World {
       return;
     }
     if (!this._hasPos) return;
-    if (this._needSets || Math.abs(this._px - this._setsX) + Math.abs(this._pz - this._setsZ) > 2) this._updateSets();
+    if (this._viewers !== null) {
+      if (this._needSets) this._updateSetsMulti();
+    } else if (this._needSets || Math.abs(this._px - this._setsX) + Math.abs(this._pz - this._setsZ) > 2) {
+      this._updateSets();
+    }
     if (this._newChunks.length > 0) this._startLoads();
     this._scheduleMeshes();
     if (this._uploadList.length > 0) this._uploadMeshes();
@@ -478,6 +499,11 @@ export class World {
       if (this._placedLeaves.delete(x + ',' + y + ',' + z)) this._placedVersion++;
     }
     if (this._listeners.length > 0) this._emitChange(x, y, z, old, id);
+    if (this.remote !== null) {
+      // Replica: the server runs the block updates and sends their results.
+      if (!opts || opts.remote !== true) this.remote.onEdit(x, y, z, id, old);
+      return true;
+    }
     if (!opts || opts.update !== false) {
       const u = this.updater;
       if (LIQUID_KIND[old] !== LIQUID_KIND[id] && y < 255) {
@@ -654,7 +680,7 @@ export class World {
    * @param {number} [timeOfDay] 0..1 (SPEC §4); scales sky light for growth rules. Omitted = full daylight.
    */
   tick(rng = Math.random, timeOfDay) {
-    if (!this._initDone || this._closing || this._frozen) return;
+    if (!this._initDone || this._closing || this._frozen || this.remote !== null) return;
     this.counters.ticks++;
     this.fluids.tick();
     if (this.updater.pending > 0) this.updater.process();
@@ -779,7 +805,85 @@ export class World {
     this.pool.reprioritize(this._reprioritizeJob);
   }
 
+  /**
+   * Stream around several players (dedicated server): `list` = [{ x, z, rd }] (block coordinates, render
+   * distance in chunks). Chunk sets are the union of every viewer's sets; distances (priorities, random-tick
+   * radius) are to the nearest viewer. An empty list unloads everything on the next update.
+   */
+  setViewers(list) {
+    this._viewers = Array.isArray(list) ? list.filter((v) => v && Number.isFinite(v.x) && Number.isFinite(v.z)) : [];
+    if (this._viewers.length > 0) {
+      this._px = this._viewers[0].x;
+      this._pz = this._viewers[0].z;
+    }
+    this._hasPos = true;
+    this._needSets = true;
+  }
+
+  /** Union of classifyChunk over the viewers and the distance to the nearest one. */
+  _classifyMulti(cx, cz) {
+    const vs = this._viewers;
+    let f = 0, d = Infinity;
+    for (let i = 0; i < vs.length; i++) {
+      const v = vs[i];
+      f |= classifyChunk(v.x, v.z, cx, cz, clampRenderDistance(v.rd));
+      const dv = chunkCenterDistance(v.x, v.z, cx, cz);
+      if (dv < d) d = dv;
+    }
+    this._multi.f = f;
+    this._multi.d = d;
+    return f;
+  }
+
+  /** _updateSets for several viewers (see setViewers). */
+  _updateSetsMulti() {
+    this._needSets = false;
+    let removed = 0;
+    for (const c of this._chunks.values()) {
+      const f = this._classifyMulti(c.cx, c.cz);
+      if (f === 0 || (c.state !== READY && (f & SET_GEN) === 0)) {
+        this._unload(c);
+        removed++;
+        continue;
+      }
+      if ((f & SET_MESH) !== 0 && (c.flags & SET_MESH) === 0) this._meshScan = true;
+      c.flags = f;
+      c.dist = this._multi.d;
+    }
+    for (const v of this._viewers) {
+      const rd = clampRenderDistance(v.rd);
+      const pcx = Math.floor(v.x / 16), pcz = Math.floor(v.z / 16);
+      const ext = rd + 2;
+      for (let dz = -ext; dz <= ext; dz++) {
+        for (let dx = -ext; dx <= ext; dx++) {
+          const cx = pcx + dx, cz = pcz + dz;
+          const key = chunkKeyNum(cx, cz);
+          if (this._chunks.has(key)) continue;
+          const f = this._classifyMulti(cx, cz);
+          if ((f & SET_GEN) === 0) continue;
+          const c = new Chunk(cx, cz);
+          c.uid = nextUid++;
+          c.flags = f;
+          c.dist = this._multi.d;
+          this._chunks.set(key, c);
+          this._newChunks.push(c);
+        }
+      }
+    }
+    if (removed > 0) this.pool.cancel(this._obsoleteJob);
+    this.pool.reprioritize(this._reprioritizeJob);
+  }
+
   _unload(c) {
+    if (this.remote !== null) {
+      // Replica: nothing is saved here; the chunk source stops listening to the server for this chunk.
+      try {
+        this.remote.onUnload?.(c.cx, c.cz);
+      } catch (err) {
+        this._logOnce('remoteUnload', '[world] remote.onUnload failed:', err);
+      }
+      if (c.state === READY && c.modified) c.modified = false;
+    }
     if (c.state === READY) {
       for (let i = 0; i < 16; i += 2) {
         const o = this._chunks.get(chunkKeyNum(c.cx + NEIGHBOURS[i], c.cz + NEIGHBOURS[i + 1]));
@@ -928,7 +1032,7 @@ export class World {
 
   /** A chunk came back from storage / the unload buffer: re-schedule its unsettled liquids. */
   _scanLiquids(c) {
-    if (c.state !== READY || c.blocks === null) return;
+    if (c.state !== READY || c.blocks === null || this.remote !== null) return;
     try {
       this.fluids.scanChunk(c.cx, c.cz, c.blocks, c.maxY);
     } catch (err) {
@@ -1048,6 +1152,7 @@ export class World {
       type: 'mesh', cx: c.cx, cz: c.cz, chunks, sectionMask: mask, smoothLighting: this.smoothLighting,
       returnBuffers: true, trimLight: true, owner: this._owner, uid: c.uid, tier,
     };
+    if (this.lightOnly) job.lightOnly = true;
     this.pool.submit(job, TIER_BASE[tier] + c.dist, transfer).then(
       (res) => this._onMeshed(c, res, seq, epoch, tier, group),
       (err) => this._onMeshFailed(c, job, err, mask, tier, group));
