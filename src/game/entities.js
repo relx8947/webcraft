@@ -39,6 +39,7 @@ import {
 } from '../world/registry.js';
 import { PLAYER } from '../config.js';
 import { MODEL_ID } from '../render/mobmodels.js';
+import { playersOf } from './players.js';
 
 const TICKS = 20;
 const MAX_STEP = 1 / TICKS;               // physics sub-step (s)
@@ -1130,11 +1131,14 @@ export class Arrow extends Entity {
         }
       }
     }
-    const p = game?.player;
-    if (p && !p.dead && (p !== this.shooter || graceOver) && finite(p.x)) {
+    const players = playersOf(game);
+    for (let i = 0; i < players.length; i++) {
+      const p = players[i];
+      if (!p || p.dead || (p === this.shooter && !graceOver) || !finite(p.x)) continue;
       const w = (finite(p.width) ? p.width : PLAYER.WIDTH) / 2, ph = finite(p.height) ? p.height : PLAYER.HEIGHT;
       if (rayBox(ox, oy, oz, dx, dy, dz, p.x - w - g, p.y - g, p.z - w - g, p.x + w + g, p.y + ph + g, p.z + w + g, _ray) &&
           _ray.t <= bestT) {
+        bestT = _ray.t;
         best = p;
       }
     }
@@ -1149,7 +1153,7 @@ export class Arrow extends Entity {
     let dmg = Math.ceil(Math.min(1e6, Math.max(0, speed * this.baseDamage)));
     if (this.critical) dmg += Math.floor(rnd() * (Math.floor(dmg / 2) + 2));
     let hurt = false;
-    if (target === game?.player) {
+    if (target === game?.player || target.isPlayer === true) {
       const scaled = this.shooter && this.shooter.type === 'mob' ? scaleMobDamage(game, dmg) : dmg;
       hurt = scaled > 0 && typeof target.damage === 'function' ? target.damage(scaled, 'arrow', undefined, this) !== false : false;
     } else if (typeof target.hurt === 'function') {
@@ -1555,11 +1559,14 @@ export class EntityManager {
         e.remove();
       }
     }
-    this._pushEntities(dt, game?.player);
+    const players = playersOf(game);
+    this._pushEntities(dt, players);
     this._buildHash();
     this._mergeItems(dt);
-    this._pickup(game?.player);
-    this._pickupArrows(game?.player);
+    for (let i = 0; i < players.length; i++) {
+      this._pickup(players[i]);
+      this._pickupArrows(players[i]);
+    }
     this._compact();
     if (game?.player) this.avatar.update(dt, game.player, game.world, this._handSwing > 0);
   }
@@ -1787,7 +1794,7 @@ export class EntityManager {
    * Entity.push between overlapping pushable entities (mobs) and between them and the player: each pair is
    * pushed apart by 0.05 b/tick · min(1, 1/√d) per tick along the larger horizontal axis distance d.
    */
-  _pushEntities(dt, player) {
+  _pushEntities(dt, players) {
     const list = this.list;
     const P = this._pushers;
     let n = 0;
@@ -1812,21 +1819,27 @@ export class EntityManager {
         this._pushPair(a, b, dx, dz, k);
       }
     }
-    if (!player || player.dead || (player.flying && player.mode === 'creative') || !finite(player.x)) return;
-    const pw = (finite(player.width) ? player.width : PLAYER.WIDTH) / 2;
-    const ph = finite(player.height) ? player.height : PLAYER.HEIGHT;
-    for (let i = 0; i < n; i++) {
-      const a = P[i].body;
-      const ahw = a.width / 2;
-      const dx = player.x - a.x, dz = player.z - a.z;
-      if (Math.abs(dx) >= ahw + pw || Math.abs(dz) >= ahw + pw) continue;
-      if (player.y >= a.y + a.height || a.y >= player.y + ph) continue;
-      let d = Math.max(Math.abs(dx), Math.abs(dz));
-      if (d < 0.01) continue;
-      d = Math.sqrt(d);
-      const f = Math.min(1, 1 / d) * k / d;
-      a.vx -= dx * f; a.vz -= dz * f;
-      if (player.mode !== 'creative') { player.vx += dx * f; player.vz += dz * f; }
+    // A single player may be passed instead of the list (older callers / tests).
+    if (players && !Array.isArray(players)) players = [players];
+    const np = players ? players.length : 0;
+    for (let q = 0; q < np; q++) {
+      const player = players[q];
+      if (!player || player.dead || (player.flying && player.mode === 'creative') || !finite(player.x)) continue;
+      const pw = (finite(player.width) ? player.width : PLAYER.WIDTH) / 2;
+      const ph = finite(player.height) ? player.height : PLAYER.HEIGHT;
+      for (let i = 0; i < n; i++) {
+        const a = P[i].body;
+        const ahw = a.width / 2;
+        const dx = player.x - a.x, dz = player.z - a.z;
+        if (Math.abs(dx) >= ahw + pw || Math.abs(dz) >= ahw + pw) continue;
+        if (player.y >= a.y + a.height || a.y >= player.y + ph) continue;
+        let d = Math.max(Math.abs(dx), Math.abs(dz));
+        if (d < 0.01) continue;
+        d = Math.sqrt(d);
+        const f = Math.min(1, 1 / d) * k / d;
+        a.vx -= dx * f; a.vz -= dz * f;
+        if (player.mode !== 'creative') { player.vx += dx * f; player.vz += dz * f; }
+      }
     }
   }
 
@@ -2121,8 +2134,10 @@ export class EntityManager {
       e.push(kx * impact * TICKS, ky * impact * TICKS, kz * impact * TICKS);
     }
     this._tmp.length = 0;
-    const player = game?.player;
-    if (player && !player.dead && finite(player.x)) {
+    const players = playersOf(game);
+    for (let q = 0; q < players.length; q++) {
+      const player = players[q];
+      if (!player || player.dead || !finite(player.x)) continue;
       const dist = Math.hypot(player.x - x, player.y - y, player.z - z) / reach;
       if (dist <= 1) {
         const eye = finite(player.eyeHeight) ? player.eyeHeight : PLAYER.EYE_HEIGHT;

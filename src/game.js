@@ -316,6 +316,7 @@ export class Game {
     // ---- world state (null outside a world) ----
     this.world = null;
     this.player = null;
+    this._playerList = [];               // `players` (shared modules iterate every player)
     this.interaction = null;
     this.entities = null;
     this.particles = null;
@@ -571,6 +572,21 @@ export class Game {
     if (input.pressed('debug')) this.ui.toggleDebug();
     if (input.pressed('hideHud')) this.ui.toggleHud();
     if (input.pressed('perspective') && this.hasPlayerModel) this.perspective = (this.perspective + 1) % 3;
+  }
+
+  /** Every player of the simulation: [player] here (the dedicated server lists all connected players). */
+  get players() {
+    const p = this.player;
+    const list = this._playerList;
+    if (p) {
+      if (list.length !== 1 || list[0] !== p) {
+        list.length = 0;
+        list.push(p);
+      }
+    } else if (list.length !== 0) {
+      list.length = 0;
+    }
+    return list;
   }
 
   /** True when the entity renderer can draw the player (third-person views via F5). */

@@ -5,7 +5,7 @@
 //   main -> worker  { type: 'generate', jobId, cx, cz }
 //   worker -> main  { type: 'generated', jobId, cx, cz, blocks, ms }               (blocks.buffer transferred)
 //   main -> worker  { type: 'mesh', jobId, cx, cz, chunks: Uint8Array[9], sectionMask, smoothLighting,
-//                     returnBuffers?, trimLight? }
+//                     returnBuffers?, trimLight?, lightOnly? }
 //   worker -> main  { type: 'meshed', jobId, cx, cz, sections: [{ sy, opaque, cutout, translucent, hash }],
 //                     light, ms, buffers? }
 //   worker -> main  { type: 'error', jobId, message }
@@ -19,6 +19,8 @@
 // bytes); with `trimLight` only the layers up to the region's highest block + 15 are returned (every
 // cell above is exactly 0xF0). Extra result fields (additive to the spec): `hash` per section (53-bit
 // hash of the three layers, 0 = empty section, lets World skip re-uploading identical meshes) and `ms`.
+//
+// `lightOnly` (dedicated server) skips the mesher: every requested section comes back empty.
 //
 // Region / light buffers are reused between jobs. `handleMessage` is exported so tests can run jobs
 // synchronously under Node; the message handler is only installed inside a worker global scope.
@@ -121,9 +123,17 @@ function mesh(msg) {
     const region = buildRegion(fullViews, regionBuf);
     const light = computeLight(region, lightBuf);
     const mask = typeof msg.sectionMask === 'number' ? msg.sectionMask & 0xffff : 0xffff;
-    sections = meshChunk(region, light, mask, gen.getTints(msg.cx, msg.cz), {
-      smoothLighting: msg.smoothLighting !== false,
-    });
+    if (msg.lightOnly) {
+      // Headless worlds (dedicated server): light only, every requested section reported as empty.
+      sections = [];
+      for (let sy = 0; sy < 16; sy++) {
+        if ((mask & (1 << sy)) !== 0) sections.push({ sy, opaque: null, cutout: null, translucent: null });
+      }
+    } else {
+      sections = meshChunk(region, light, mask, gen.getTints(msg.cx, msg.cz), {
+        smoothLighting: msg.smoothLighting !== false,
+      });
+    }
     const full = extractChunkLight(light, chunkLightBuf);
     // trimLight: above the region's highest block + 15 every cell is exactly 0xF0 (open sky, no block
     // light can reach that high), so only the layers below are returned.

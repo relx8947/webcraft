@@ -14,6 +14,7 @@ import {
   Entity, Arrow, registerEntityType, createModelRenderItem, liquidSurface, fluidFlow, scaleMobDamage,
 } from './entities.js';
 import { makeStack } from './inventory.js';
+import { playersOf, nearestPlayer } from './players.js';
 import { aabbIntersectsSolid, PhysicsBody } from './physics.js';
 import * as audioModule from './audio.js';
 import {
@@ -106,6 +107,22 @@ function approachAngle(a, b, max) {
 }
 
 /** SPEC yaw (0 = north, +π/2 = west) of the direction (dx, dz). */
+/** Filters for nearestPlayer (module functions: no closure per AI tick). */
+let _temptItems = null;
+function holdsTemptItem(p) {
+  if (p.dead || _temptItems === null) return false;
+  const stack = typeof p.getSelectedStack === 'function' ? p.getSelectedStack() : null;
+  return !!stack && _temptItems.includes(stack.id);
+}
+function isAlive(p) {
+  return !p.dead;
+}
+
+/** A player hostile mobs may target: alive, survival (not creative / spectator), with a position. */
+function isTargetable(p) {
+  return !!p && !p.dead && p.mode !== 'creative' && p.mode !== 'spectator' && finite(p.x);
+}
+
 function yawOf(dx, dz) {
   return Math.atan2(-dx, -dz);
 }
@@ -448,6 +465,8 @@ export class Mob extends Entity {
     this._panic = DZ;
     this._lookMode = 0;              // 0 none, 1 player, 2 random direction, 3 target
     this._lookLock = false;          // the AI drives the look this tick (tempted animals)
+    this._lookPlayer = null;         // player looked at (look mode 1)
+    this._temptedBy = null;          // nearest player holding the tempt item (set by _tempted)
     this._lookTimer = DZ;
     this._lookYaw = DZ;
     this._lookPitch = DZ;
@@ -564,7 +583,7 @@ export class Mob extends Entity {
     if (src && src !== this) {
       this.lastAttacker = src;
       this._attackerTime = 0;
-      if (src === game?.player || src.type === 'player' || (src.inventory && src.type !== 'mob')) this._playerHurt = 0;
+      if (src === game?.player || src.isPlayer === true || src.type === 'player' || (src.inventory && src.type !== 'mob')) this._playerHurt = 0;
     }
     // player-only loot when the player hurt it within the last 5 s (fall / fire deaths after a hit count too)
     this.killedByPlayer = this._playerHurt < 5;
@@ -754,8 +773,8 @@ export class Mob extends Entity {
       return true;
     }
     if (this.persistent) return false;
-    const p = game?.player;
-    if (!p || !finite(p.x)) return false;
+    const p = nearestPlayer(game, this.body.x, this.body.y, this.body.z);
+    if (!p) return false;
     const dx = p.x - this.body.x, dy = p.y - this.body.y, dz = p.z - this.body.z;
     const d2 = dx * dx + dy * dy + dz * dz;
     if (d2 > DESPAWN_FAR * DESPAWN_FAR) {
@@ -1137,11 +1156,10 @@ export class Mob extends Entity {
     playSound(game, name, b.x, b.y + this.def.eyeHeight, b.z, 1, this._voicePitch());
   }
 
-  /** The player when it is a valid target for hostile mobs (alive, survival). */
+  /** The nearest player that is a valid target for hostile mobs (alive, survival), or null. */
   _validPlayer(game) {
-    const p = game?.player;
-    if (!p || p.dead || p.mode === 'creative' || p.mode === 'spectator' || !finite(p.x)) return null;
-    return p;
+    const b = this.body;
+    return nearestPlayer(game, b.x, b.y, b.z, Infinity, isTargetable);
   }
 
   _distSq(e) {
@@ -1173,7 +1191,9 @@ export class Mob extends Entity {
   _updateTarget(world, game, mustBeDark = false) {
     const p = this._validPlayer(game);
     const range = this.def.followRange ?? 16;
-    if (this.target && (this.target !== p || this._distSq(p) > range * range)) this.target = null;
+    // A target stays a target while it is targetable and in range, even when another player comes closer.
+    const t = this.target;
+    if (t && (!isTargetable(t) || !playersOf(game).includes(t) || this._distSq(t) > range * range)) this.target = null;
     if (this.target) {
       const seen = this._updateSight(world, this.target);
       this._unseen = seen ? 0 : this._unseen + 1;
@@ -1181,9 +1201,10 @@ export class Mob extends Entity {
       return;
     }
     if (!p) return;
-    // revenge: the player hurt us recently
-    if (this.lastAttacker === p && this._attackerTime < 5) {
-      this.target = p;
+    // revenge: a player hurt us recently
+    const la = this.lastAttacker;
+    if (la && this._attackerTime < 5 && isTargetable(la) && playersOf(game).includes(la) && this._distSq(la) <= range * range) {
+      this.target = la;
       this._unseen = 0;
       return;
     }
@@ -1220,7 +1241,7 @@ export class Mob extends Entity {
     }
     // TemptGoal: follow a nearby player holding the animal's food
     if (this._tempted(game)) {
-      const p = game.player;
+      const p = this._temptedBy;
       this.eatTicks = 0;
       this._lookMode = 3;
       this._lookLock = true;
@@ -1259,13 +1280,19 @@ export class Mob extends Entity {
     }
   }
 
-  /** True while a survival / creative player holding this animal's tempt item is within 10 blocks. */
+  /**
+   * True while a survival / creative player holding this animal's tempt item is within 10 blocks; the nearest
+   * such player is kept in `_temptedBy`.
+   */
   _tempted(game) {
     const items = TEMPT[this.mobType];
-    const p = game?.player;
-    if (!items || !p || p.dead || !finite(p.x) || this._distSq(p) > 100) return false;
-    const stack = typeof p.getSelectedStack === 'function' ? p.getSelectedStack() : null;
-    return !!stack && items.includes(stack.id);
+    this._temptedBy = null;
+    if (!items) return false;
+    const b = this.body;
+    _temptItems = items;
+    this._temptedBy = nearestPlayer(game, b.x, b.y, b.z, 10, holdsTemptItem);
+    _temptItems = null;
+    return this._temptedBy !== null;
   }
 
   _canEatHere(world) {
@@ -1680,7 +1707,7 @@ export class Mob extends Entity {
     if (this._lookTimer > 0) {
       this._lookTimer -= TICK;
       if (this._lookMode === 1) {
-        const p = game?.player;
+        const p = this._lookPlayer;
         if (p && !p.dead && finite(p.x)) this._lookAt(p.x, p.y + (finite(p.eyeHeight) ? p.eyeHeight : 1.62), p.z);
       }
       if (this._lookTimer <= 0) this._lookMode = 0;
@@ -1688,10 +1715,11 @@ export class Mob extends Entity {
     }
     const rnd = this.rnd;
     if (this.moveMode !== MOVE_NONE && this.moveMode !== MOVE_STRAFE) return;
-    const p = game?.player;
     const range = this.def.look;
-    if (p && !p.dead && finite(p.x) && rnd() < 0.02 && this._distSq(p) < range * range) {
+    const p = nearestPlayer(game, this.body.x, this.body.y, this.body.z, range, isAlive);
+    if (p && rnd() < 0.02 && this._distSq(p) < range * range) {
       this._lookMode = 1;
+      this._lookPlayer = p;
       this._lookTimer = (40 + Math.floor(rnd() * 40)) * TICK;
       this._lookAt(p.x, p.y + (finite(p.eyeHeight) ? p.eyeHeight : 1.62), p.z);
     } else if (rnd() < 0.02) {
@@ -1848,28 +1876,41 @@ export class MobSpawner {
   update(dt) {
     const game = this.game;
     if (!(dt > 0) || !game?.world || !game.entities) return;
-    const p = game.player;
-    if (!p || !finite(p.x)) return;
+    const players = playersOf(game);
+    if (players.length === 0) return;
     const diff = game.settings?.difficulty ?? 'normal';
     this.hostileTimer -= dt;
     if (this.hostileTimer <= 0) {
       this.hostileTimer += diff === 'easy' ? 2 : 1;
       if (this.hostileTimer < 0) this.hostileTimer = 0.5;
       if (diff !== 'peaceful') {
-        try { this.spawnHostiles(); } catch (err) { console.error('[mobs] hostile spawning failed', err); }
+        // Every player gets its own spawn attempts (multiplayer); the caps count mobs around that player.
+        for (let i = 0; i < players.length; i++) {
+          const p = players[i];
+          if (!p || !finite(p.x)) continue;
+          try { this.spawnHostiles(p); } catch (err) { console.error('[mobs] hostile spawning failed', err); }
+        }
       }
     }
     this.passiveTimer -= dt;
     if (this.passiveTimer <= 0) {
       this.passiveTimer = 15 + this.rng() * 10;
-      try { this.spawnPassive(); } catch (err) { console.error('[mobs] passive spawning failed', err); }
+      for (let i = 0; i < players.length; i++) {
+        const p = players[i];
+        if (!p || !finite(p.x)) continue;
+        try { this.spawnPassive(p); } catch (err) { console.error('[mobs] passive spawning failed', err); }
+      }
     }
   }
 
-  /** Mobs of a category (hostile true / false) within `radius` blocks of the player. */
-  _count(hostile, radius) {
-    const p = this.game.player;
+  /** Mobs of a category (hostile true / false) within `radius` blocks of player `p` (default: the player). */
+  _count(hostile, radius, p = this._defaultPlayer()) {
     return this.game.entities.countEntities((e) => e.type === 'mob' && e.hostile === hostile && !e.dead, p.x, p.z, radius);
+  }
+
+  /** The single player (single player / tests), else the first one. */
+  _defaultPlayer() {
+    return this.game.player ?? playersOf(this.game)[0] ?? null;
   }
 
   /**
@@ -1888,6 +1929,20 @@ export class MobSpawner {
     const rnd = this.rng;
     if (sky > rnd() * 32) return false;
     return eff <= Math.floor(rnd() * 8);
+  }
+
+  /** True when any player is closer than minDistance to (x, y, z) (no spawning in someone's face). */
+  _nearAnyPlayer(x, y, z) {
+    const players = playersOf(this.game);
+    if (players.length < 2) return false;      // the single player was already checked by the caller
+    const m2 = this.minDistance * this.minDistance;
+    for (let i = 0; i < players.length; i++) {
+      const q = players[i];
+      if (!q || !finite(q.x)) continue;
+      const dx = x - q.x, dy = y - q.y, dz = z - q.z;
+      if (dx * dx + dy * dy + dz * dz < m2) return true;
+    }
+    return false;
   }
 
   /** True if a mob of `type` fits at feet (x + 0.5, y, z + 0.5) on a solid opaque floor. */
@@ -1914,12 +1969,11 @@ export class MobSpawner {
    * One round of hostile spawn attempts: random columns 24–64 blocks from the player, half at the surface,
    * half at a random height (caves); groups of 1–4 of one type around a valid spot. Returns the number spawned.
    */
-  spawnHostiles() {
+  spawnHostiles(p = this._defaultPlayer()) {
     const game = this.game;
     const world = game.world;
-    const p = game.player;
-    if (p.dead) return 0;
-    let room = this.hostileCap - this._count(true, DESPAWN_FAR);
+    if (!p || p.dead) return 0;
+    let room = this.hostileCap - this._count(true, DESPAWN_FAR, p);
     if (room <= 0) return 0;
     const rnd = this.rng;
     let spawned = 0;
@@ -1966,16 +2020,16 @@ export class MobSpawner {
     const dx = x + 0.5 - p.x, dy = y - p.y, dz = z + 0.5 - p.z;
     const d2 = dx * dx + dy * dy + dz * dz;
     if (d2 < this.minDistance * this.minDistance || d2 > DESPAWN_FAR * DESPAWN_FAR) return false;
+    if (this._nearAnyPlayer(x + 0.5, y, z + 0.5)) return false;
     if (!this._spawnable(world, type, x, y, z, true)) return false;
     return this._darkEnough(world, x, y, z);
   }
 
   /** A group of 2–4 animals on lit grass 24–80 blocks away while fewer than 10 are within 96 blocks. */
-  spawnPassive() {
+  spawnPassive(p = this._defaultPlayer()) {
     const game = this.game;
     const world = game.world;
-    const p = game.player;
-    if (p.dead || this._count(false, 96) >= this.passiveCap) return 0;
+    if (!p || p.dead || this._count(false, 96, p) >= this.passiveCap) return 0;
     const rnd = this.rng;
     for (let a = 0; a < 4; a++) {
       const ang = rnd() * TAU;
@@ -1985,6 +2039,7 @@ export class MobSpawner {
       const top = typeof world.getTopY === 'function' ? world.getTopY(x, z) : -1;
       if (top < 1 || world.getBlock(x, top, z) !== BLOCK.GRASS_BLOCK) continue;
       const y = top + 1;
+      if (this._nearAnyPlayer(x + 0.5, y, z + 0.5)) continue;
       if (typeof world.getLight === 'function') {
         const l = world.getLight(x, y, z) & 255;
         if (Math.max(l >> 4, l & 15) <= 8) continue;      // Animal.isBrightEnoughToSpawn: raw light > 8
