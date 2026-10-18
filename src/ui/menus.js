@@ -9,6 +9,8 @@ import { measurePixelText } from './font.js';
 import { paintLogo, paintSubtitle } from './logo.js';
 import { BLOCK } from '../world/registry.js';
 import { DEFAULT_SETTINGS } from '../config.js';
+import { statusUrl, loadSavedName } from '../net/client.js';
+import { validName } from '../net/protocol.js';
 
 export const VERSION = 'WebCraft 1.1';
 
@@ -116,9 +118,14 @@ export class TitleScreen extends MenuScreen {
 
     const j = 48;
     this.button('单人游戏', cx(-100), fy(1 / 4, j), 200, () => ui.openWorldList());
-    this.button('关于 WebCraft', cx(-100), fy(1 / 4, j + 24), 200, () => ui.setScreen(new AboutScreen(ui, () => ui.showTitle())));
-    this.button('选项...', cx(-100), fy(1 / 4, j + 60), 98, () => ui.openOptions(() => ui.showTitle()));
-    this.fullscreen = this.button(fullscreenLabel(), cx(2), fy(1 / 4, j + 60), 98, () => toggleFullscreen());
+    this.mpBtn = this.button('多人游戏', cx(-100), fy(1 / 4, j + 24), 200, () => ui.openMultiplayer());
+    this.button('关于 WebCraft', cx(-100), fy(1 / 4, j + 48), 98, () => ui.setScreen(new AboutScreen(ui, () => ui.showTitle())));
+    // The online count on the multiplayer button (best effort: offline / file pages just say 多人游戏).
+    fetchServerStatus().then((st) => {
+      if (st && this.ui.screen === this) this.mpBtn.setLabel(`多人游戏（${st.online} 人在线）`);
+    });
+    this.button('选项...', cx(2), fy(1 / 4, j + 48), 98, () => ui.openOptions(() => ui.showTitle()));
+    this.fullscreen = this.button(fullscreenLabel(), cx(-100), fy(1 / 4, j + 76), 200, () => toggleFullscreen());
     this.onFs = () => this.fullscreen.setLabel(fullscreenLabel());
     document.addEventListener('fullscreenchange', this.onFs);
 
@@ -126,7 +133,7 @@ export class TitleScreen extends MenuScreen {
     this.el.appendChild(ver);
     const copy = label('非官方作品 · 与 Mojang 无关', 'title-copy');
     this.el.appendChild(copy);
-    this.addStorageWarning(fy(1 / 4, j + 86));
+    this.addStorageWarning(fy(1 / 4, j + 102));
   }
 
   setLogo(textures) {
@@ -171,6 +178,71 @@ function toggleFullscreen() {
   const p = document.documentElement.requestFullscreen?.();
   if (p && typeof p.then === 'function') {
     p.then(() => navigator.keyboard?.lock?.()).then(null, () => {});
+  }
+}
+
+/** GET the server's status ({ online, max, players, motd }) or null (no server next to this page). */
+export async function fetchServerStatus() {
+  const url = statusUrl();
+  if (!url || location.protocol === 'file:') return null;
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 4000);
+    const res = await fetch(url, { cache: 'no-store', signal: ctl.signal });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const st = await res.json();
+    return st && Number.isFinite(st.online) ? st : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Multiplayer
+// ---------------------------------------------------------------------------------------------
+export class MultiplayerScreen extends MenuScreen {
+  constructor(ui) {
+    super(ui, 'multiplayer');
+    this.back = () => ui.showTitle();
+    this.title('多人游戏', 20);
+    this.status = this.text('§7正在查询服务器…', 44, 'mp-status');
+    this.players = this.text('', 56, 'mp-players');
+    this.text('你的名字', 78, 'field-label');
+    this.nameField = new TextField({ width: 200, value: loadSavedName(), maxLength: 16, onEnter: () => this.join() });
+    place(this.nameField.el, { x: cx(-100), y: 89 });
+    this.el.appendChild(this.nameField.el);
+    this.hint = this.text('§7汉字、字母、数字、下划线，最多 16 个字', 112, 'field-hint');
+    this.text('§7名字会绑定到这个浏览器，别人不能冒用；世界里的东西所有人共享', 124, 'field-hint');
+    this.joinBtn = this.button('加入游戏', cx(-155), fy(1, -28), 150, () => this.join());
+    this.button('返回', cx(5), fy(1, -28), 150, () => this.back());
+    this.refreshStatus();
+  }
+
+  onOpen() {
+    this.nameField.focus();
+  }
+
+  async refreshStatus() {
+    const st = await fetchServerStatus();
+    if (this.ui.screen !== this) return;
+    if (!st) {
+      renderFormatted(this.status, '§c暂时连不上服务器，可以稍后再试');
+      return;
+    }
+    renderFormatted(this.status, `§a服务器在线 §f${st.online} / ${st.max} 人${st.world ? ` · ${st.world}` : ''}`);
+    const names = (st.players ?? []).slice(0, 8).join('、');
+    renderFormatted(this.players, names ? `§7${names}${st.players.length > 8 ? ' 等' : ''}` : (st.motd ? `§7${st.motd}` : ''));
+  }
+
+  join() {
+    const name = this.nameField.value.trim();
+    if (!validName(name)) {
+      renderFormatted(this.hint, '§c名字只能包含 1-16 个汉字、字母、数字、下划线或减号');
+      this.nameField.focus();
+      return;
+    }
+    this.ui.startMultiplayer(name);
   }
 }
 
@@ -668,7 +740,8 @@ export class PauseScreen extends MenuScreen {
     this.button('选项...', cx(-100), fy(1 / 4, 32), 200, () => ui.openOptions(() => ui.showPauseMenu(), true));
     this.button('操作说明...', cx(-100), fy(1 / 4, 56), 200,
       () => ui.setScreen(new AboutScreen(ui, () => ui.showPauseMenu(), true)));
-    this.quitBtn = this.button('保存并退出到标题画面', cx(-100), fy(1 / 4, 80), 200, () => ui.saveAndQuit());
+    this.quitBtn = this.button(ui.game.remote ? '断开连接' : '保存并退出到标题画面', cx(-100), fy(1 / 4, 80), 200,
+      () => ui.saveAndQuit());
   }
 
   onEscape() {

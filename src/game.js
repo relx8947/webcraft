@@ -23,6 +23,11 @@
 // the sprint key) and accidental tab closes. Failed saves are reported to the player (chat line + the
 // 'saveFailed' event); "save and quit" keeps the world open when saving fails. A world can be open in
 // only one tab at a time (WorldLocks, like Minecraft's session.lock).
+//
+// Multiplayer (docs/MULTIPLAYER.md): startRemoteWorld(client) enters the dedicated server's world. The
+// world is then a replica (World `remote` mode), entities are server replicas (src/net/replica.js), the
+// simulation (liquids, random ticks, furnaces, mobs, spawning) runs on the server, nothing is saved
+// locally, chat and commands go to the server and the game keeps running behind the pause menu.
 
 import {
   DEFAULT_SETTINGS, SETTINGS_STORAGE_KEY, DAY_TICKS, TICKS_PER_SECOND, computeDaylight, skyLightLevelAt,
@@ -41,6 +46,7 @@ import { MobSpawner, spawnMob, MOB_TYPES } from './game/mobs.js';
 import { BlockEntityManager } from './game/blockentities.js';
 import { makeStack } from './game/inventory.js';
 import { runCommand, resolveItem, resolveBlock } from './game/commands.js';
+import { RemoteEntityManager, RemoteBlockEntities } from './net/replica.js';
 
 const DEG = Math.PI / 180;
 const MAX_PITCH = 89.9 * DEG;
@@ -317,6 +323,10 @@ export class Game {
     this.world = null;
     this.player = null;
     this._playerList = [];               // `players` (shared modules iterate every player)
+    /** MultiplayerClient while connected to a server (src/net/client.js), else null. */
+    this.remote = null;
+    /** The server's difficulty while connected (overrides settings.difficulty for the local player). */
+    this.remoteDifficulty = null;
     this.interaction = null;
     this.entities = null;
     this.particles = null;
@@ -377,7 +387,9 @@ export class Game {
     this.debug = this._createDebugApi();
     // Like Minecraft, the death message ("玩家被僵尸杀死了") is also posted in chat.
     this.on('playerDied', (msg) => {
-      if (typeof msg === 'string' && msg) this.addChatMessage(msg);
+      // Multiplayer: the server announces it to everyone (with the player's name).
+      if (this.remote) this.remote.send({ t: 'died', m: typeof msg === 'string' ? msg : '' });
+      else if (typeof msg === 'string' && msg) this.addChatMessage(msg);
     });
     this._frameCallback = (t) => this._frame(t);
     // Registered only while a persistent world is open (see _setUnloadGuard): Ctrl+W / Ctrl+R / closing
@@ -444,7 +456,8 @@ export class Game {
   }
 
   /** Set the world time in ticks (absolute, like /time set). */
-  setTime(ticks) {
+  setTime(ticks, { local = false } = {}) {
+    if (this.remote && !local) return;               // the server's clock (/time runs on the server)
     const t = Math.floor(Number(ticks));
     if (!Number.isFinite(t)) return;
     this.time = Math.max(0, t);
@@ -523,12 +536,17 @@ export class Game {
     if (!world) return;
     const player = this.player;
     if (this.state === 'loading') {
+      this.remote?.update(dt);                 // multiplayer: chunk subscriptions go out while loading too
       world.update(player.x, player.y, player.z, dt);
       this._updateLoading();
       return;
     }
     if (this.state !== 'playing') return;
     const input = this.input;
+    if (this.remote) {
+      this._updateRemote(dt, input);
+      return;
+    }
 
     this._handleKeys(input);
     if (this._pendingTp) this._updatePendingTeleport();
@@ -562,6 +580,33 @@ export class Game {
         if (!this._temporary) this.saveWorld().catch((err) => this._reportSaveError(err, 'autosave'));
       }
     }
+    world.update(player.x, player.y, player.z, dt);
+    this.audio?.setUnderwater(player.eyeInWater);
+  }
+
+  /**
+   * Multiplayer frame: the local player and interaction as usual, the clock runs locally between the
+   * server's time messages, entities are interpolated replicas; no world ticks, no saving, no pause.
+   */
+  _updateRemote(dt, input) {
+    const world = this.world;
+    const player = this.player;
+    this._handleKeys(input);
+    if (this._pendingTp) this._updatePendingTeleport();
+    player.update(dt, input);
+    this.interaction.update(dt, input);
+    this._tickAcc += dt * TICKS_PER_SECOND;
+    let n = 0;
+    while (this._tickAcc >= 1 && n < MAX_TICKS_PER_FRAME) {
+      this._tickAcc -= 1;
+      this.time++;
+      n++;
+    }
+    if (this._tickAcc >= 1) this._tickAcc = 0.999;
+    this.entities.update(dt);
+    this.particles.update(dt);
+    this._animTime += dt;
+    this.remote?.update(dt);
     world.update(player.x, player.y, player.z, dt);
     this.audio?.setUnderwater(player.eyeInWater);
   }
@@ -792,6 +837,110 @@ export class Game {
       this._loading = { resolve, reject, meta, isNew, startedAt: performance.now() };
     });
     return meta;
+  }
+
+  /**
+   * Enter the dedicated server's world (multiplayer). `client` is a connected MultiplayerClient whose
+   * 'welcome' carried the world (seed, spawn), the time, the difficulty and the player's saved record.
+   * Resolves once the spawn area is meshed (like startWorld). The connection's end (kick, network)
+   * unloads the world and calls client.onDisconnect.
+   */
+  async startRemoteWorld(client) {
+    if (this._loading || this._starting) throw new Error('另一个世界正在加载中');
+    if (this.world) await this.quitToTitle();
+    const w = client.welcome;
+    const meta = {
+      id: 'mp', name: w.world.name, seed: w.world.seed >>> 0, seedText: String(w.world.seed >>> 0),
+      worldType: w.world.type === 'flat' ? 'flat' : 'default', mode: w.rec?.mode === 'creative' ? 'creative' : 'survival',
+      spawn: { ...w.world.spawn }, player: w.rec ?? null, time: w.time, created: 0, lastPlayed: Date.now(),
+    };
+    Object.defineProperty(meta, 'temporary', { value: true, enumerable: false });
+    this.remote = client;
+    this.remoteDifficulty = w.difficulty;
+    this.state = 'loading';
+    this.paused = false;
+    globalThis.__ready = false;
+    this._readySignalled = false;
+    this.emit('loadingProgress', 0, '正在进入服务器…');
+    this._temporary = true;
+    this.worldMeta = meta;
+    this.time = Number.isFinite(w.time) ? w.time : NEW_WORLD_TIME;
+    this._tickAcc = 0;
+    this._animTime = 0;
+    this.perspective = 0;
+    this.playerName = client.name;
+
+    let world;
+    try {
+      world = new World({
+        seed: meta.seed, worldType: meta.worldType, worldId: 'mp',
+        storage: client.chunkSource, remote: client.remoteHooks,
+        pool: this.pool, renderer: this.renderer,
+        renderDistance: this.settings.renderDistance, smoothLighting: this.settings.smoothLighting,
+        uploadBudgetMs: LOADING_UPLOAD_BUDGET_MS,
+      });
+      this.world = world;
+      this.player = new Player(this);
+      this.interaction = new Interaction(this);
+      this.entities = new RemoteEntityManager(this, client);
+      this.interaction.spawnMob = (game, type, x, y, z, opts) => {
+        this.entities?.spawnMobRequest(type, x, y, z, opts);
+        return true;
+      };
+      this.particles = new ParticleSystem(this);
+      this.blockEntities = new RemoteBlockEntities(this, client);
+      this.spawner = null;
+      this._unsubBlock = world.onBlockChanged((x, y, z, oldId, newId) => this.emit('blockChanged', x, y, z, oldId, newId));
+    } catch (err) {
+      this.remote = null;
+      await this._abortLoading();
+      throw err;
+    }
+    client.onDisconnect = (reason) => this._remoteDisconnected(reason);
+
+    const player = this.player;
+    const isNew = !meta.player;
+    try {
+      await world.init();
+      if (isNew) {
+        player.setGameMode('survival');
+        player.spawnPoint = { ...meta.spawn };
+        player.setPosition(meta.spawn.x, meta.spawn.y, meta.spawn.z);
+        player.yaw = 0;
+      } else {
+        player.deserialize(meta.player);
+        if (!player.spawnPoint || !Number.isFinite(player.spawnPoint.x)) player.spawnPoint = { ...meta.spawn };
+      }
+    } catch (err) {
+      this.remote = null;
+      await this._abortLoading();
+      throw err;
+    }
+    await new Promise((resolve, reject) => {
+      this._loading = { resolve, reject, meta, isNew, startedAt: performance.now(), remote: true };
+    });
+    return meta;
+  }
+
+  /** The server closed the connection (kick, restart, network): back to the title with the reason. */
+  _remoteDisconnected(reason) {
+    if (!this.remote) return;
+    const ui = this.ui;
+    this.quitToTitle({ discard: true }).finally(() => {
+      ui?.showMessage?.('连接已断开', reason || '与服务器的连接已断开', () => ui.showTitle());
+    });
+  }
+
+  /** Chat line typed by the player: commands and messages (multiplayer: to the server). */
+  sendChat(text) {
+    const t = String(text ?? '').trim();
+    if (!t) return;
+    if (this.remote) {
+      this.remote.send({ t: 'chat', m: t });
+      return;
+    }
+    if (t.startsWith('/')) this.runCommand(t);
+    else this.addChatMessage(`<${this.playerName || '玩家'}> ${t}`);
   }
 
   /** Called every frame while loading: progress events, then enter the world once the area is ready. */
@@ -1147,6 +1296,23 @@ export class Game {
   }
 
   async _quit(discard) {
+    if (this.remote) {
+      // Multiplayer: nothing to save here (the server keeps the world and the player record).
+      const client = this.remote;
+      this.remote = null;
+      this.remoteDifficulty = null;
+      client.onDisconnect = null;
+      client.disconnect();
+      if (this._loading) {
+        const L = this._loading;
+        await this._abortLoading();
+        L.reject(new Error('已断开连接'));
+        return;
+      }
+      if (this.world) await this._unloadWorld(true);
+      else this.state = 'title';
+      return;
+    }
     if (this._loading) {
       const L = this._loading;
       await this._abortLoading();
@@ -1258,6 +1424,10 @@ export class Game {
    * the world, like Minecraft's integrated server ("Saving and pausing game...").
    */
   setPaused(paused) {
+    if (this.remote) {
+      this.paused = false;             // a server world never stops for one player's menu
+      return;
+    }
     const was = this.paused;
     this.paused = !!paused;
     if (this.paused && !was && this._canSave()) {
@@ -1267,9 +1437,10 @@ export class Game {
   }
 
   /** 'survival' | 'creative' */
-  setGameMode(mode) {
+  setGameMode(mode, { remote = false } = {}) {
     if (mode !== 'survival' && mode !== 'creative') return;
     if (!this.player) return;
+    if (this.remote && !remote) return;              // the server decides (/gamemode runs there)
     this.player.setGameMode(mode);
     if (this.worldMeta) this.worldMeta.mode = mode;
     this.emit('gameModeChanged', mode);
@@ -1282,6 +1453,10 @@ export class Game {
 
   /** Run a chat command ("/give ..."); feedback arrives as chat messages. */
   runCommand(text) {
+    if (this.remote) {
+      this.remote.send({ t: 'chat', m: String(text ?? '') });
+      return;
+    }
     runCommand(this, text);
   }
 
@@ -1302,6 +1477,7 @@ export class Game {
    */
   spawnMob(type, x, y, z, opts) {
     if (!this.entities || !this.world) return null;
+    if (this.remote) return this.entities.spawnMobRequest(type, x, y, z, opts);
     return spawnMob(this, type, x, y, z, opts);
   }
 

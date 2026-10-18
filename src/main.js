@@ -8,6 +8,7 @@
 //   rd=<n>        render distance for this session      time=<ticks>|noon|night|… (applied on entering)
 //   nomusic=1     no background music                   save=1   persist the autostart world
 //   automation=1  mouse / keyboard work without pointer lock (implied by autostart=1)
+//   mp=1&name=<n> join the multiplayer server right away (tests; implies automation)
 // window.__game = the Game; window.__ready = true once the spawn area is meshed and a frame rendered.
 
 import { Game, loadSettings, parseTimeParam, sanitizeSettings } from './game.js';
@@ -46,7 +47,7 @@ function showFatal(title, detail) {
 
 async function main() {
   const canvas = document.getElementById('game-canvas');
-  const automation = flag('autostart') || flag('automation');
+  const automation = flag('autostart') || flag('automation') || !!params.get('mp');
 
   // ---- settings (URL overrides are session-only)
   const settings = loadSettings();
@@ -124,6 +125,10 @@ async function main() {
       console.error('[main] autostart failed:', err);
       ui.showTitle();
     }
+  } else if (params.get('mp')) {
+    // Automation: join the multiplayer server right away as `name`.
+    ui.showTitle();
+    ui.startMultiplayer(params.get('name') || 'Tester');
   } else {
     ui.showTitle();
   }

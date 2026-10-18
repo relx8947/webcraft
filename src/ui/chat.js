@@ -205,7 +205,9 @@ export class ChatScreen {
       const hist = this.ui.chatHistory;
       if (hist[hist.length - 1] !== text) hist.push(text);
       while (hist.length > 100) hist.shift();
-      if (text.startsWith('/')) {
+      if (this.game.remote && typeof this.game.sendChat === 'function') {
+        this.game.sendChat(text);              // multiplayer: the server echoes it to everyone
+      } else if (text.startsWith('/')) {
         if (typeof this.game.runCommand === 'function') this.game.runCommand(text);
       } else {
         this.ui.postChat(`<${this.game.playerName || '玩家'}> ${text}`);

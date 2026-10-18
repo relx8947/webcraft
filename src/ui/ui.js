@@ -17,8 +17,9 @@ import {
 } from './containers.js';
 import {
   TitleScreen, WorldListScreen, OptionsScreen, LoadingScreen, PauseScreen, DeathScreen, MessageScreen,
-  SaveFailedScreen,
+  SaveFailedScreen, MultiplayerScreen,
 } from './menus.js';
+import { MultiplayerClient } from '../net/client.js';
 import { createItemView, setItemView } from './itemview.js';
 import { deathMessage } from './text.js';
 
@@ -321,6 +322,32 @@ export class UIManager {
     this.setScreen(new WorldListScreen(this));
   }
 
+  openMultiplayer() {
+    this.setScreen(new MultiplayerScreen(this));
+  }
+
+  /** Connect to the dedicated server as `name` and enter its world (loading screen meanwhile). */
+  async startMultiplayer(name) {
+    this.showLoading('正在连接服务器');
+    const client = new MultiplayerClient(this.game, { name, renderDistance: this.game.settings?.renderDistance ?? 8 });
+    try {
+      await client.connect();
+      this.setLoadingProgress(0, '正在进入世界…');
+      await this.game.startRemoteWorld(client);
+      if (this.game.state === 'playing' && this.screen instanceof LoadingScreen) {
+        this.enterGame();
+        const motd = client.welcome?.motd;
+        if (motd) this.game.addChatMessage(`§6${motd}`);
+        this.game.addChatMessage('§7按 T 聊天，输入 /list 查看在线玩家');
+      }
+    } catch (err) {
+      client.disconnect();
+      if (this.game.remote === client) await this.game.quitToTitle({ discard: true }).catch(() => {});
+      console.warn('[ui] multiplayer failed:', err);
+      this.showMessage('无法进入服务器', String(err?.message ?? err), () => this.openMultiplayer());
+    }
+  }
+
   /** Loading screen with a title line; progress via setLoadingProgress(). */
   showLoading(text = '正在加载世界') {
     if (this.screen instanceof LoadingScreen) this.screen.setTitle(text);
@@ -441,7 +468,8 @@ export class UIManager {
    * @param {{ discard?: boolean }} [opts]
    */
   async saveAndQuit({ discard = false } = {}) {
-    this.setScreen(new MessageScreen(this, { title: discard ? '正在退出世界' : '正在保存世界' }));
+    const title = this.game.remote ? '正在断开连接' : discard ? '正在退出世界' : '正在保存世界';
+    this.setScreen(new MessageScreen(this, { title }));
     try {
       await this.game.quitToTitle?.(discard ? { discard: true } : undefined);
     } catch (err) {

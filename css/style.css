@@ -1148,3 +1148,27 @@ body {
     animation: none;
   }
 }
+
+/* ---- Multiplayer ------------------------------------------------------------------------------ */
+/* Name tags above other players (positioned by src/net/client.js every frame). */
+.mp-tags {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.mp-tag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 1px 5px 2px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  font: 15px/1.2 "Microsoft YaHei", "PingFang SC", sans-serif;
+  white-space: nowrap;
+  will-change: transform;
+}
+.screen-multiplayer .mp-status,
+.screen-multiplayer .mp-players {
+  text-align: center;
+}

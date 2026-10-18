@@ -376,7 +376,7 @@ export class Player {
   get onFire() { return this.fireTime > 0; }
   /** Difficulty from the settings: 'peaceful' | 'easy' | 'normal' (default) | 'hard'. */
   get difficulty() {
-    const d = this.game?.settings?.difficulty;
+    const d = this.game?.remoteDifficulty ?? this.game?.settings?.difficulty;
     return d === 'peaceful' || d === 'easy' || d === 'hard' ? d : 'normal';
   }
 
